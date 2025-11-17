@@ -405,6 +405,8 @@ public class CompanyService extends BaseService {
 			plot.setUnit(apiPlot.getUnit());
 			plot.setSize(apiPlot.getSize());
 			plot.setFarmer(existingFarmer);
+            plot.setCenterLongitude(apiPlot.getCenterLongitude());
+            plot.setCenterLatitude(apiPlot.getCenterLatitude());
 			plot.setLastUpdated(new Date());
 
 			for (ApiPlotCoordinate apiPlotCoordinate : apiPlot.getCoordinates()) {
@@ -897,6 +899,18 @@ public class CompanyService extends BaseService {
 			plotRow.createCell(8, CellType.NUMERIC).setCellValue(apiPlot.getOrganicStartOfTransition());
 			plotRow.getCell(8).setCellStyle(dateCellStyle);
 			// plotsSheet.autoSizeColumn(8);
+
+            // Create center latitude point
+            plotRow.createCell(9, CellType.NUMERIC);
+            if (apiPlot.getCenterLatitude() != null) {
+                plotRow.getCell(9).setCellValue(apiPlot.getCenterLatitude());
+            }
+
+            // Create center latitude point
+            plotRow.createCell(10, CellType.NUMERIC);
+            if (apiPlot.getCenterLongitude() != null) {
+                plotRow.getCell(10).setCellValue(apiPlot.getCenterLongitude());
+            }
 		}
 
 		return plotsSheetRowNum;
@@ -1135,6 +1149,8 @@ public class CompanyService extends BaseService {
 				plot.setSize(apiPlot.getSize());
 				plot.setOrganicStartOfTransition(apiPlot.getOrganicStartOfTransition());
 				plot.setFarmer(userCustomer);
+                plot.setCenterLongitude(apiPlot.getCenterLongitude());
+                plot.setCenterLatitude(apiPlot.getCenterLatitude());
 				plot.setLastUpdated(new Date());
 
 				for (ApiPlotCoordinate apiPlotCoordinate : apiPlot.getCoordinates()) {
@@ -1315,6 +1331,8 @@ public class CompanyService extends BaseService {
 			plot.setLastUpdated(new Date());
 			plot.setOrganicStartOfTransition(apiPlot.getOrganicStartOfTransition());
 			plot.setUnit(apiPlot.getUnit());
+            plot.setCenterLongitude(apiPlot.getCenterLongitude());
+            plot.setCenterLatitude(apiPlot.getCenterLatitude());
 
 			if (plot.getId() != null) {
 				refreshGeoIDForUserCustomerPlot(userCustomer.getId(), plot.getId(), user, language);
@@ -1520,6 +1538,8 @@ public class CompanyService extends BaseService {
 		plot.setSize(request.getSize());
 		plot.setOrganicStartOfTransition(request.getOrganicStartOfTransition());
 		plot.setFarmer(userCustomer);
+        plot.setCenterLatitude(request.getCenterLatitude());
+        plot.setCenterLongitude(request.getCenterLongitude());
 		plot.setLastUpdated(new Date());
 
 		for (ApiPlotCoordinate apiPlotCoordinate : request.getCoordinates()) {
