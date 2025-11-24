@@ -54,6 +54,7 @@ import org.torpedoquery.jakarta.jpa.Torpedo;
 import org.torpedoquery.jakarta.jpa.Function;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.*;
@@ -689,6 +690,18 @@ public class CompanyService extends BaseService {
 		plotsHeaderRow.createCell(8, CellType.STRING).setCellValue(TranslateTools.getTranslatedValue(
 				messageSource, "export.plots.column.dateOfTransitionToOrganic.label", language
 		));
+        plotsHeaderRow.createCell(9, CellType.STRING).setCellValue(TranslateTools.getTranslatedValue(
+                messageSource, "export.plots.column.centralLatitude.label", language
+        ));
+        plotsHeaderRow.createCell(10, CellType.STRING).setCellValue(TranslateTools.getTranslatedValue(
+                messageSource, "export.plots.column.centralLongitude.label", language
+        ));
+        plotsHeaderRow.createCell(11, CellType.STRING).setCellValue(TranslateTools.getTranslatedValue(
+                messageSource, "export.plots.column.synchroDate.label", language
+        ));
+        plotsHeaderRow.createCell(12, CellType.STRING).setCellValue(TranslateTools.getTranslatedValue(
+                messageSource, "export.plots.column.collector.label", language
+        ));
 	}
 
 	private int fillFarmersExcelData(ApiUserCustomer apiUserCustomer,
@@ -905,11 +918,27 @@ public class CompanyService extends BaseService {
             if (apiPlot.getCenterLatitude() != null) {
                 plotRow.getCell(9).setCellValue(apiPlot.getCenterLatitude());
             }
-
             // Create center latitude point
             plotRow.createCell(10, CellType.NUMERIC);
             if (apiPlot.getCenterLongitude() != null) {
                 plotRow.getCell(10).setCellValue(apiPlot.getCenterLongitude());
+            }
+            plotRow.createCell(11, CellType.STRING);
+            if (apiPlot.getSynchronisationDate() != null) {
+                SimpleDateFormat formatter = new SimpleDateFormat("dd/MM/yyyy");
+                String formattedDate = formatter.format(apiPlot.getSynchronisationDate());
+                plotRow.getCell(11).setCellValue(formattedDate);
+            }
+
+            plotRow.createCell(12, CellType.STRING);
+            if (apiPlot.getCollectorId() != null) {
+                String the_name = null;
+                try {
+                    the_name = String.valueOf(userQueries.fetchUser(apiPlot.getCollectorId()).getName());
+                } catch (ApiException e) {
+                    throw new RuntimeException(e);
+                }
+                plotRow.getCell(12).setCellValue(the_name);
             }
 		}
 
@@ -1153,6 +1182,9 @@ public class CompanyService extends BaseService {
                 plot.setCenterLatitude(apiPlot.getCenterLatitude());
 				plot.setLastUpdated(new Date());
 
+                // Initialiser avec LinkedHashSet pour préserver l'ordre
+                plot.setCoordinates(new ArrayList<>());
+
 				for (ApiPlotCoordinate apiPlotCoordinate : apiPlot.getCoordinates()) {
 					PlotCoordinate plotCoordinate = new PlotCoordinate();
 					plotCoordinate.setLatitude(roundCoordinate(apiPlotCoordinate.getLatitude()));
@@ -1163,7 +1195,7 @@ public class CompanyService extends BaseService {
 				}
 
 				// Generate Plot GeoID
-				plot.setGeoId(generatePlotGeoID(plot.getCoordinates()));
+				//plot.setGeoId(generatePlotGeoID(plot.getCoordinates()));
 
 				userCustomer.getPlots().add(plot);
 			}
@@ -1173,7 +1205,7 @@ public class CompanyService extends BaseService {
 	}
 
 	@Transactional
-	public ApiUserCustomer updateUserCustomer(ApiUserCustomer apiUserCustomer, CustomUserDetails user, Language language) throws ApiException {
+	public ApiUserCustomer updateUserCustomer(ApiUserCustomer apiUserCustomer, CustomUserDetails user, Language language, Long userId) throws ApiException {
 
 		if (apiUserCustomer == null) {
 			return null;
@@ -1309,6 +1341,8 @@ public class CompanyService extends BaseService {
 			plot.getCoordinates().removeIf(coordinate -> apiPlot.getCoordinates().stream()
 					.noneMatch(apiCoordinate -> coordinate.getId().equals(apiCoordinate.getId())));
 
+            plot.setCoordinates(new ArrayList<>());
+
 			for (ApiPlotCoordinate apiPlotCoordinate : apiPlot.getCoordinates()) {
 				PlotCoordinate plotCoordinate = plot.getCoordinates().stream()
 						.filter(p -> p.getId() != null && p.getId()
@@ -1333,6 +1367,12 @@ public class CompanyService extends BaseService {
 			plot.setUnit(apiPlot.getUnit());
             plot.setCenterLongitude(apiPlot.getCenterLongitude());
             plot.setCenterLatitude(apiPlot.getCenterLatitude());
+
+            if(plot.getSynchronisationDate() ==null){
+                plot.setCollectorId(userId);
+                plot.setSynchronisationDate(new Date());
+            }
+
 
 			if (plot.getId() != null) {
 				refreshGeoIDForUserCustomerPlot(userCustomer.getId(), plot.getId(), user, language);
@@ -1414,22 +1454,23 @@ public class CompanyService extends BaseService {
 		for (Plot plot : userCustomer.getPlots()) {
 
 			Feature feature;
-			if (plot.getCoordinates().size() < 3) {
+            // Convertir le Set en List pour préserver l'ordre
+            List<PlotCoordinate> orderedCoordinates = new ArrayList<>(plot.getCoordinates());
 
-				feature = Feature.fromGeometry(Point.fromLngLat(
-						plot.getCoordinates().stream().toList().get(0).getLongitude(),
-						plot.getCoordinates().stream().toList().get(0).getLatitude()
-				));
-			} else {
+            if (orderedCoordinates.size() < 3) {
+                feature = Feature.fromGeometry(Point.fromLngLat(
+                        orderedCoordinates.get(0).getLongitude(),
+                        orderedCoordinates.get(0).getLatitude()
+                ));
+            } else {
+                List<Point> polygonCoordinates = orderedCoordinates
+                        .stream()
+                        .map(plotCoordinate -> Point.fromLngLat(
+                                plotCoordinate.getLongitude(),
+                                plotCoordinate.getLatitude()
+                        ))
+                        .collect(Collectors.toList());
 
-				List<Point> polygonCoordinates = plot.getCoordinates()
-						.stream()
-						.map(plotCoordinate -> Point.fromLngLat(
-								plotCoordinate.getLongitude(),
-								plotCoordinate.getLatitude()
-						))
-						.collect(
-						Collectors.toList());
 				polygonCoordinates.add(Point.fromLngLat(
 						plot.getCoordinates().stream().toList().get(0).getLongitude(),
 						plot.getCoordinates().stream().toList().get(0).getLatitude()));
@@ -1444,7 +1485,7 @@ public class CompanyService extends BaseService {
 	}
 
 	@Transactional
-	public void uploadUserCustomerGeoData(CustomUserDetails authUser, Long id, MultipartFile file) throws ApiException {
+	public void uploadUserCustomerGeoData(CustomUserDetails authUser, Long id, MultipartFile file, Long userId) throws ApiException {
 
 		UserCustomer userCustomer = fetchUserCustomer(id);
 		PermissionsUtil.checkUserIfCompanyEnrolled(userCustomer.getCompany().getUsers().stream().toList(), authUser);
@@ -1471,9 +1512,11 @@ public class CompanyService extends BaseService {
 					ApiPlot apiPlot = new ApiPlot();
 					apiPlot.setPlotName("Plot " + plotIndex++);
 
-					double polygonSizeInHa = TurfMeasurement.area(feature) / SQUARE_METRES_PER_HECTARE;
-					apiPlot.setSize(Math.floor(polygonSizeInHa * 100) / 100);
-					apiPlot.setUnit("ha");
+						double polygonSizeInHa = TurfMeasurement.area(feature) / SQUARE_METRES_PER_HECTARE;
+						apiPlot.setSize(Math.floor(polygonSizeInHa * 100) / 100);
+						apiPlot.setUnit("ha");
+                        apiPlot.setCollectorId(userId);
+                        apiPlot.setSynchronisationDate(new Date());
 
 					List<Point> polygonCoordinates = polygon.coordinates().get(0);
 
@@ -1494,8 +1537,10 @@ public class CompanyService extends BaseService {
 
 					Point point = (Point) feature.geometry();
 
-					ApiPlot apiPlot = new ApiPlot();
-					apiPlot.setPlotName("Point " + pointIndex++);
+						ApiPlot apiPlot = new ApiPlot();
+						apiPlot.setPlotName("Point " + pointIndex++);
+                        apiPlot.setCollectorId(userId);
+                        apiPlot.setSynchronisationDate(new Date());
 
 					ApiPlotCoordinate coordinate = new ApiPlotCoordinate();
 					coordinate.setLongitude(point.longitude());
@@ -1542,18 +1587,29 @@ public class CompanyService extends BaseService {
         plot.setCenterLongitude(request.getCenterLongitude());
 		plot.setLastUpdated(new Date());
 
+        // INITIALISATION EXPLICITE AVEC LinkedHashSet
+        plot.setCoordinates(new ArrayList<>());
+
+        int order = 0; // pour save lordre des coordonnées
 		for (ApiPlotCoordinate apiPlotCoordinate : request.getCoordinates()) {
 			PlotCoordinate plotCoordinate = new PlotCoordinate();
-			plotCoordinate.setLatitude(roundCoordinate(apiPlotCoordinate.getLatitude()));
-			plotCoordinate.setLongitude(roundCoordinate(apiPlotCoordinate.getLongitude()));
+			plotCoordinate.setLatitude(apiPlotCoordinate.getLatitude());
+			plotCoordinate.setLongitude(apiPlotCoordinate.getLongitude());
+            plotCoordinate.setCoordinateOrder(order++); // Définir l'ordre
 			plotCoordinate.setPlot(plot);
 			plot.getCoordinates().add(plotCoordinate);
+            System.out.println("Coordonnée ajoutée: " + apiPlotCoordinate.getLatitude() + ", " + apiPlotCoordinate.getLongitude());
+
 		}
 
+        System.out.println("Nombre de coordonnées après ajout: " + plot.getCoordinates().size());
 		// Generate Plot GeoID
 		plot.setGeoId(generatePlotGeoID(plot.getCoordinates()));
 
 		em.persist(plot);
+
+        Plot savedPlot = em.find(Plot.class, plot.getId());
+        System.out.println("Nombre de coordonnées en base: " + (savedPlot != null ? savedPlot.getCoordinates().size() : "null"));
 
 		return PlotMapper.toApiPlot(plot, language);
 	}
@@ -2015,5 +2071,6 @@ public class CompanyService extends BaseService {
 
 		return productTypeProxy;
 	}
+
 
 }
