@@ -18,14 +18,14 @@ import java.util.List;
 @Service
 public class AgStackClientService {
 
-	@Value("${INATrace.agstack.apiKey}")
-	private String apiKey;
-
-	@Value("${INATrace.agstack.clientSecret}")
-	private String clientSecret;
-
 	@Value("${INATrace.agstack.baseURL}")
 	private String baseURL;
+
+    private final AgStackClientTokenManager tokenService;
+
+    public AgStackClientService(AgStackClientTokenManager tokenService) {
+        this.tokenService = tokenService;
+    }
 
 	public ApiRegisterFieldBoundaryResponse registerFieldBoundaryResponse(List<PlotCoordinate> plotCoordinates) {
 
@@ -44,14 +44,16 @@ public class AgStackClientService {
 		}
 		request.setWkt("POLYGON ((" + stringBuilder + "))");
 
+        String token = this.tokenService.retrieveToken();
+
 		WebClient webClient = WebClient.create(baseURL);
 
 		return webClient
 				.post()
 				.uri(uriBuilder -> uriBuilder.path("/register-field-boundary").build())
 				.body(Mono.just(request), ApiRegisterFieldBoundaryRequest.class)
-				.header("API-KEY", apiKey)
-				.header("CLIENT-SECRET", clientSecret)
+				.header("Authorization", "Bearer" + token)
+				.header("X-FROM-ASSET-REGISTRY", "True")
 				.accept(MediaType.APPLICATION_JSON)
 				.retrieve()
 				.onStatus(

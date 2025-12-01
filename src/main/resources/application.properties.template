@@ -142,6 +142,6 @@ beyco.oauth2.url =
 beyco.integration.url =
 
 #AgStack integration
-INATrace.agstack.apiKey =
-INATrace.agstack.clientSecret =
+INATrace.agstack.email =
+INATrace.agstack.password =
 INATrace.agstack.baseURL =
