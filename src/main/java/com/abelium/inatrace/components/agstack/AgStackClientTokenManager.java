@@ -17,8 +17,7 @@ import java.time.Instant;
 
 @Service
 public class AgStackClientTokenManager {
-
-    private static final long TOKEN_REFRESH_MINUTES = 3 * 60;
+    private static final long TOKEN_REFRESH_SECONDS = 3 * 3600;
 
     @Value("${INATrace.agstack.email}")
     private String email;
@@ -26,7 +25,7 @@ public class AgStackClientTokenManager {
     @Value("${INATrace.agstack.password}")
     private String password;
 
-    @Value("${INATrace.agstack.baseURL}")
+    @Value("${INATrace.agstack.loginBaseURL}")
     private String baseURL;
 
     private String token;
@@ -43,14 +42,16 @@ public class AgStackClientTokenManager {
 
     private void refreshToken(Instant instant) {
         this.token = this.login(email, password).getAccessToken();
-        this.lastUpdated = instant;
+        if (token != null) {
+            this.lastUpdated = instant;
+        }
     }
 
     private boolean shouldRefreshToken(Instant instant) {
         if (this.token == null || this.lastUpdated == null) {
             return true;
         }
-        return Duration.between(instant, this.lastUpdated).toMinutes() < TOKEN_REFRESH_MINUTES;
+        return Duration.between(this.lastUpdated, instant).toSeconds() > TOKEN_REFRESH_SECONDS;
     }
 
     private ApiLoginResponse login(String username, String password) {
@@ -61,9 +62,11 @@ public class AgStackClientTokenManager {
         WebClient webClient = WebClient.create(baseURL);
         return webClient
                 .post()
-                .uri(uriBuilder ->  uriBuilder.path("/login").build())
+                .uri(uriBuilder -> uriBuilder.path("/login").build())
                 .body(Mono.just(apiLoginRequest), ApiLoginRequest.class)
+                .header("User-Agent", "Postman") // Fix for API to return JSON
                 .header("X-FROM-ASSET-REGISTRY", "True")
+                .header("Content-Type", "application/json")
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve()
                 .onStatus(

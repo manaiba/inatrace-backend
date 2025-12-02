@@ -1383,6 +1383,7 @@ public class CompanyService extends BaseService {
 			}
 
 		} catch (Exception e) {
+            logger.error(e.getMessage());
 			logger.error("Error while generating plot geoid");
 		}
 

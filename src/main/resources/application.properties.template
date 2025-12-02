@@ -145,3 +145,4 @@ beyco.integration.url =
 INATrace.agstack.email =
 INATrace.agstack.password =
 INATrace.agstack.baseURL =
+INATrace.agstack.loginBaseURL=

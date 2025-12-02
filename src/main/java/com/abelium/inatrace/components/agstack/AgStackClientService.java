@@ -27,7 +27,7 @@ public class AgStackClientService {
         this.tokenService = tokenService;
     }
 
-	public ApiRegisterFieldBoundaryResponse registerFieldBoundaryResponse(List<PlotCoordinate> plotCoordinates) {
+	public ApiRegisterFieldBoundaryResponse registerFieldBoundaryResponse(List<PlotCoordinate> plotCoordinates) throws ApiException {
 
 		ApiRegisterFieldBoundaryRequest request = new ApiRegisterFieldBoundaryRequest();
 		request.setS2Index("8, 13");
@@ -45,6 +45,9 @@ public class AgStackClientService {
 		request.setWkt("POLYGON ((" + stringBuilder + "))");
 
         String token = this.tokenService.retrieveToken();
+        if (token == null) {
+            throw new ApiException(ApiStatus.ERROR, "Error while retrieving api token");
+        }
 
 		WebClient webClient = WebClient.create(baseURL);
 
@@ -52,7 +55,7 @@ public class AgStackClientService {
 				.post()
 				.uri(uriBuilder -> uriBuilder.path("/register-field-boundary").build())
 				.body(Mono.just(request), ApiRegisterFieldBoundaryRequest.class)
-				.header("Authorization", "Bearer" + token)
+				.header("Authorization", "Bearer " + token)
 				.header("X-FROM-ASSET-REGISTRY", "True")
 				.accept(MediaType.APPLICATION_JSON)
 				.retrieve()
