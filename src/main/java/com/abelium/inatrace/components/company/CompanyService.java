@@ -1377,12 +1377,21 @@ public class CompanyService extends BaseService {
 
 			ApiRegisterFieldBoundaryResponse response = agStackClientService.registerFieldBoundaryResponse(coordinates);
 			if (!CollectionUtils.isEmpty(response.getMatchedGeoIDs())) {
+                // On errors API returns additional message
+                if (response.getMessage() != null) {
+                    logger.error(response.getMessage());
+                }
 				return response.getMatchedGeoIDs().stream().findFirst().orElse(null);
 			} else {
+                // On errors API returns additional message
+                if (response.getGeoID() == null && response.getMessage() != null) {
+                    logger.error(response.getMessage());
+                }
 				return response.getGeoID();
 			}
 
 		} catch (Exception e) {
+            logger.error(e.getMessage());
 			logger.error("Error while generating plot geoid");
 		}
 
