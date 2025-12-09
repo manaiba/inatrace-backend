@@ -141,8 +141,8 @@ beyco.oauth2.url =
 
 beyco.integration.url =
 
-#AgStack integration
+# AgStack integration
 INATrace.agstack.email =
 INATrace.agstack.password =
 INATrace.agstack.baseURL =
-INATrace.agstack.loginBaseURL=
+INATrace.agstack.loginBaseURL =
