@@ -74,6 +74,48 @@ integrations, security settings, and application behavior. This section outlines
 each component.
 
 ### 3.1 Backend Configuration
-
+- **INATRACE_ENV**: Specifies the environment in which the application is running (TEST, PROD, or DEMO)
+- **INATRACE_DATABASE_NAME**: Specifies the name of the MySQL database to use
+- **INATRACE_DATABASE_HOSTNAME**: Specifies the hostname or IP address of the MySQL database server
+- **SPRING_DATASOURCE_USERNAME**: Specifies the username to use for database access
+- **SPRING_DATASOURCE_PASSWORD**: Specifies the password to use for database access
+- **INATRACE_FILESTORAGE_ROOT**: Specifies the root directory for file storage
+- **INATRACE_IMPORT_PATH**: Specifies the path to the directory containing CSV files to import
+- **INATRACE_DOCUMENTS_ROOT**: Specifies the root directory for uploaded documents
+- **SPRING_MAIL_PROTOCOL**: Specifies the protocol to use for sending email notifications
+- **SPRING_MAIL_HOST**: Specifies the hostname or IP address of the SMTP server
+- **SPRING_MAIL_PORT**: Specifies the port number of the SMTP server
+- **SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH**: Specifies whether to use authentication when connecting to the SMTP server
+- **SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLED**: Specifies whether to enable TLS encryption when connecting to the SMTP server
+- **SPRING_MAIL_USERNAME**: Specifies the username to use for SMTP authentication
+- **SPRING_MAIL_PASSWORD**: Specifies the password to use for SMTP authentication
+- **INATRACE_MAIL_TEMPLATE_FROM**: Specifies the sender address for email notifications
+- **INATRACE_MAIL_SENDINGENABLED**: Specifies whether email notifications are enabled
+- **INATRACE_EMAILCONFIRMATION_URL**: Specifies the URL to use for email confirmation links
+- **INATRACE_PASSWORDRESET_URL**: Specifies the URL to use for password reset links
+- **INATRACE_EXCHANGERATE_APIKEY**: Specifies the API key for the Exchange Rates API
+- **INATRACE_AUTH_JWTSIGNINGKEY**: Specifies the signing key for JWT tokens
+- **INATRACE_REQUESTLOG_TOKEN**: Specifies the token to use for public request logging
+- **BEYCO_OAUTH2_CLIENTID**: Specifies the OAuth2 client ID for Beyco API authentication
+- **BEYCO_OAUTH2_CLIENTSECRET**: Specifies the OAuth2 client secret for Beyco API authentication
+- **BEYCO_OAUTH2_URL**: Specifies the URL for Beyco API authentication
+- **BEYCO_INTEGRATION_URL**: Specifies the URL for Beyco API integration
+- **INATRACE_AUTH_ACCESSTOKENEXPIRATIONSEC**: Specifies the access token expiration time in seconds
+- **INATRACE_AGSTACK_BASEURL**: Specifies the base URL for the AgStack API
+- **INATRACE_AGSTACK_LOGINBASEURL**: Specifies the base URL for the AgStack login API
+- **INATRACE_AGSTACK_EMAIL**: Specifies the email address to use for AgStack authentication
+- **INATRACE_AGSTACK_PASSWORD**: Specifies the password to use for AgStack authentication
 
 ### 3.2 Frontend Configuration
+- **ENVIRONMENT_NAME**: Specifies the name of the environment in which the application is running (TEST, PROD, or DEMO)
+- **APP_BASE_URL**: Specifies the base URL for the frontend application
+- **QR_CODE_BASE_PATH**: Specifies the base path for product public pages
+- **RELATIVE_FILE_UPLOAD_URL**: Specifies the relative path for file uploads
+- **RELATIVE_FILE_UPLOAD_URL_MANUAL_TYPE**: Specifies the relative path for manual file uploads
+- **RELATIVE_IMAGE_UPLOAD_URL**: Specifies the relative path for image uploads
+- **RELATIVE_IMAGE_UPLOAD_URL_ALL_SIZES**: Specifies the relative path for all-size image uploads
+- **BEYCO_AUTH_URL**: Specifies the URL for Beyco API authentication
+- **BEYCO_CLIENT_ID**: Specifies the OAuth2 client ID for Beyco API authentication
+- **GOOGLE_MAPS_API_KEY**: Specifies the Google Maps API key
+- **TOKEN_FOR_PUBLIC_LOG_ROUTE**: Specifies the token to use for public request logging
+- **MAPBOX_ACCESS_TOKEN**: Specifies the Mapbox access token
