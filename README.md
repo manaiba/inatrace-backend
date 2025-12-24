@@ -6,17 +6,17 @@ digitalization of supply chains, connects every actor along the supply chain, as
 
 Project is composed of 4 parts:
 
-* [Angular frontend](https://github.com/INATrace/fe/tree/main)
+* [Frontend application](https://github.com/INATrace/fe/tree/main)
 * [Mobile app](https://github.com/INATrace/mobile/tree/main)
 * [Java backend](https://github.com/INATrace/backend/tree/main)
 * [Coffee network](https://github.com/INATrace/coffee-network/tree/main)
 
 # INATrace 2
 This new major release includes new functionalities, refactorings, optimizations and bugfixes. The most important additions and changes are:
-* Added support for generic value chains. Different value chains with its specific settings can now be configured in the system.
+* Added support for generic value chains. Different value chains with their specific settings can now be configured in the system.
 * Multi-tenant system support.
 * Reorganized the content in the Product section. This section now includes only the content that is related to a product.
-* Introduced a new section "Company". This section includes all the content that is related with the company's work process within the value chain.
+* Introduced a new section "Company". This section includes all the content that is related to the company's work process within the value chain.
 * The configuration of farmers and collectors is decoupled from the product, and it's part of the Company section.
 * Added support for importing farmers from a provided Excel file.
 * The company customers are now decoupled from the Stakeholders in the product section and are configured as part of the Company section.
@@ -26,22 +26,24 @@ This new major release includes new functionalities, refactorings, optimizations
 * Added support for defining Processing evidence fields in the system settings.
 * Translation for facilities, processing actions, semi-products and processing evidence types and fields can be provided in the system as part of its definition.
 * Added support for currencies in the system. The enabled currencies can be selected in the system settings. These currencies then appear as select options in various parts of the system where the user is expected to select a currency.
-* Added exchange rates for the enabled currencies that are synced on a daily basis. The currencies data is provided by the https://exchangeratesapi.io/ API.
-* The product section now includes Final products. Final products represent the output of a final processing. The final products can be configured by the product admin company.
-* When placing customer order, now we select a final product instead of a sellable semi-product.
+* Added exchange rates for the enabled currencies that are synced daily. The currencies data is provided by the https://exchangeratesapi.io/ API.
+* The product section now includes Final products. Final products represent the output of final processing. The final products can be configured by the product admin company.
+* When placing a customer order, now we select a final product instead of a sellable semi-product.
 * Added support for new types of processing actions.
 * Added support for bulk purchases for semi-products.
 * Various changes and addition of new functionalities for purchases, processing and payments.
 
+# Technical Documentation
+For detailed technical documentation, please refer to [TECHNICAL_DOCUMENTATION.md](TECHNICAL_DOCUMENTATION.md).
 
 # Backend
 
 ## Installing / Getting started
 
 ### Requirements
-* Java `11` or higher
-* Maven `3`
-* MySQL `8.0.33`
+* Java `17` or higher
+* Maven `3.8.5`
+* MySQL `8.4.6`
 
 ### Optional
 * Docker
@@ -64,7 +66,7 @@ This new major release includes new functionalities, refactorings, optimizations
 Spin up a container:
 
 ```
-docker run --name inatrace-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=inatrace -e MYSQL_USER=inatrace -e MYSQL_PASSWORD=inatrace -p 3306:3306 -d mysql:8.0.33
+docker run --name inatrace-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=inatrace -e MYSQL_USER=inatrace -e MYSQL_PASSWORD=inatrace -p 3306:3306 -d mysql:8.4.6
 ```
 
 Tables will be created and prefilled with starter data on application startup.
@@ -128,7 +130,7 @@ Spring uses `application.properties` file stored in `src/main/resources` for con
 - `INAtrace.exchangerate.apiKey`: API key for exchange rate service. Create a free account at [https://exchangeratesapi.io](https://exchangeratesapi.io/) to get an API key.
 
 ###### Beyco integration
-INATrace supports integration with Beyco platform. This allows users to create Beyco offers automatically from INATrace stock orders. For more info about Beyco, please go to: `https://beyco.nl`. This integration is optional. Integration properties are following:
+INATrace supports integration with the Beyco platform. This allows users to create Beyco offers automatically from INATrace stock orders. For more info about Beyco, please go to: `https://beyco.nl`. This integration is optional. Integration properties are following:
 - `beyco.oauth2.clientId`: `clientId`
 - `beyco.oauth2.clientSecret`: `clientSecret`
 - `beyco.oauth2.url`: `url`
@@ -139,14 +141,14 @@ The values of these properties are provided by Beyco. If integration with Byeco 
 
 ### OpenAPI
 
-Resources are annotated with Swagger annotations version `1.5.13`. After the application is started, the Swagger service definition JSON is served at `http://localhost:8080/v2/api-docs`.
+Resources are annotated with Swagger annotations. After the application is started, the Swagger service definition JSON is served at `http://localhost:8080/v3/api-docs`.
 
 #### Postman
 
 Using Postman, you can create a collection from the Swagger definition.
 
 - Select `Import > Link`
-- Enter [http://localhost:8080/v2/api-docs](http://localhost:8080/v2/api-docs)
+- Enter [http://localhost:8080/v3/api-docs](http://localhost:8080/v2/api-docs)
 - Click `Continue`
 - Review configuration
 - Click `Import`
@@ -155,7 +157,7 @@ Using Postman, you can create a collection from the Swagger definition.
   - Click `Variables`
   - Edit row `baseUrl` to contain `localhost:8080` as current value
 
-All requests are populated with sample requests, but the content is random. Fill in data to accomodate your test case.
+All requests are populated with sample requests, but the content is random. Fill in data to accommodate your test case.
 
 ### Authentication
 
@@ -294,10 +296,10 @@ Response:
 }
 ```
 
-Response is structured in following way:
+Response is structured in the following way:
 It always contains attribute [`status`](https://github.com/INATrace/backend/blob/main/src/main/java/com/abelium/INATrace/api/ApiStatus.java).
 If response is successful, then `status` is equal to 'OK' and appropriate response can be found under `data` attribute.
-If response is unsuccessful (see above link for other statuses), then `errorMessage` attribute is returned.
+If response is unsuccessful (see the above link for other statuses), then `errorMessage` attribute is returned.
 
 Example of successful and unsuccessful response
 ```
@@ -343,7 +345,7 @@ The service exposes methods `convert` and `convertAtDate` to convert between any
 ## Database
 
 ### Version
-MySQL `8.0.33`
+MySQL `8.4.6`
 
 ### Connection
 
@@ -423,7 +425,7 @@ mvn clean install
 
 #### Base
 
-`openjdk:11-jre-slim`
+`eclipse-temurin:17-jre`
 
 Since only the major version is specified, the build process will always pull the latest minor and patch versions automatically.
 
