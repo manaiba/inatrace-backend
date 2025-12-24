@@ -1,4 +1,4 @@
-# INATrace technical documentation
+# INATrace Technical Documentation
 
 ## Introduction
 
