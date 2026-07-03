@@ -1,1 +1,4 @@
 target
+
+# Never bake environment config into the image.
+src/main/resources/application.properties
