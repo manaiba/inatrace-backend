@@ -11,6 +11,8 @@ import com.abelium.inatrace.db.entities.currencies.CurrencyPair;
 import com.abelium.inatrace.tools.PaginationTools;
 import com.abelium.inatrace.tools.QueryTools;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -28,6 +30,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class CurrencyTypeService extends BaseService {
+
+    private static final Logger logger = LoggerFactory.getLogger(CurrencyTypeService.class);
 
     private static final String CURRENCY = "currency";
 
@@ -64,12 +68,20 @@ public class CurrencyTypeService extends BaseService {
     @Scheduled(cron = "0 1 0 * * *")
     @EventListener(ApplicationReadyEvent.class)
     public void updateCurrencies() {
+
+        // Skip the external exchangeratesapi.io calls entirely when no API key is configured,
+        // otherwise every startup and daily cron would fail with 401 Unauthorized.
+        if (apiKey == null || apiKey.isBlank()) {
+            logger.warn("Exchange rate API key (INAtrace.exchangerate.apiKey) is not configured; skipping currency update.");
+            return;
+        }
+
         WebClient webClientSymbols = WebClient.create("http://api.exchangeratesapi.io/v1/symbols?access_key=" + apiKey);
         ApiCurrencySymbolsResponse apiCurrencySymbolsResponse = webClientSymbols
                 .get()
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve().bodyToMono(ApiCurrencySymbolsResponse.class)
-                .doOnError(Throwable::printStackTrace)
+                .doOnError(e -> logger.warn("Could not fetch currency symbols from exchangeratesapi.io: {}", e.getMessage()))
                 .onErrorReturn(new ApiCurrencySymbolsResponse())
                 .block();
         if (apiCurrencySymbolsResponse != null && apiCurrencySymbolsResponse.isSuccess()) {
@@ -90,7 +102,7 @@ public class CurrencyTypeService extends BaseService {
                 .get()
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve().bodyToMono(ApiCurrencyRatesResponse.class)
-                .doOnError(Throwable::printStackTrace)
+                .doOnError(e -> logger.warn("Could not fetch currency rates from exchangeratesapi.io: {}", e.getMessage()))
                 .onErrorReturn(new ApiCurrencyRatesResponse())
                 .block();
         if (apiCurrencyResponse != null && apiCurrencyResponse.isSuccess()) {
