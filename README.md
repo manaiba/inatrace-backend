@@ -137,6 +137,12 @@ INATrace supports integration with the Beyco platform. This allows users to crea
 
 The values of these properties are provided by Beyco. If integration with Byeco is not needed, the values of these properties should be empty.
 
+###### FAO GeoID registry integration
+INATrace can resolve a GeoID given in a farmer import sheet to the plot boundary it identifies. For more info about the registry, please go to: `https://data.apps.fao.org/geoid/docs`. The registry is queried read-only and needs no credentials. This integration is optional. Integration properties are following:
+- `INATrace.geoid.baseURL`: `baseURL`
+
+If GeoID resolution is not needed, the value of this property should be empty. The registry is then never contacted and farmer imports use the coordinates carried by the import sheet itself.
+
 ## APIs
 
 ### OpenAPI
