@@ -86,6 +86,13 @@ public class UserCustomerImportService extends BaseService {
         // company product types (first two)
         List<ApiProductType> companyProductTypes = readCompanyProductTypes(companyId, language);
 
+        // in case the list is empty, which means company missconfiguration, return an error.
+        if (companyProductTypes.isEmpty()) {
+                 throw new ApiException(ApiStatus.INVALID_REQUEST,
+                     "Company has no product types configured. "
+                     + "Please associate the company with a value chain before importing farmers.");
+        }
+        
         // if only first product type is given in Excel,
         // then take only the first element from company product types list
         if (!hasSecondProductType) {
