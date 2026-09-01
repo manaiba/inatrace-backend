@@ -72,7 +72,10 @@ spring.thymeleaf.mode = HTML
 # set to true in production
 spring.thymeleaf.cache = false
 
-# SMTP settings
+# SMTP settings -- optional.
+# With INATrace.mail.sendingEnabled = false (below) the application starts without
+# them and simply never sends. Set spring.mail.host before turning sending on,
+# otherwise startup fails with an explicit message rather than dropping mail silently.
 #spring.mail.protocol = smtp
 #spring.mail.host =
 #spring.mail.port = 1025
