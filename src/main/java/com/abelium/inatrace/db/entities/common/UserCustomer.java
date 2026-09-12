@@ -19,6 +19,8 @@ import java.util.Set;
 			    query = "SELECT u FROM UserCustomer u WHERE u.company.id = :companyId AND u.name = :name AND u.surname = :surname AND u.userCustomerLocation.address.city = :city"),
 	@NamedQuery(name = "UserCustomer.getUserCustomerByCompanyAndInternalId",
 			    query = "SELECT u FROM UserCustomer u WHERE u.company.id = :companyId AND u.farmerCompanyInternalId = :internalId"),
+	@NamedQuery(name = "UserCustomer.getFarmerByCompanyIdAndInternalId",
+			    query = "SELECT u FROM UserCustomer u WHERE u.company.id = :companyId AND u.farmerCompanyInternalId = :internalId AND u.type = com.abelium.inatrace.types.UserCustomerType.FARMER"),
 	@NamedQuery(name = "UserCustomer.countCompanyFarmers",
 			    query = "SELECT COUNT(u) FROM UserCustomer u WHERE u.company.id = :companyId AND u.type = com.abelium.inatrace.types.UserCustomerType.FARMER")
 })

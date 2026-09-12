@@ -351,6 +351,65 @@ public class CompanyService extends BaseService {
 				.isEmpty();
 	}
 
+	/**
+	 * Attaches the plots of an import row to a farmer that is already on file, rather than creating
+	 * a second farmer for the same person. The farmer is identified by the internal id the company
+	 * gave it, looked up inside that company only.
+	 *
+	 * @return {@code true} when a farmer was found and its plots were attached
+	 */
+	@Transactional
+	public boolean addPlotsToExistingFarmer(Long companyId, ApiUserCustomer apiUserCustomer) throws ApiException {
+
+		if (StringUtils.isBlank(apiUserCustomer.getFarmerCompanyInternalId())
+				|| CollectionUtils.isEmpty(apiUserCustomer.getPlots())) {
+			return false;
+		}
+
+		List<UserCustomer> matchingFarmers = em.createNamedQuery("UserCustomer.getFarmerByCompanyIdAndInternalId", UserCustomer.class)
+				.setParameter("companyId", companyId)
+				.setParameter("internalId", apiUserCustomer.getFarmerCompanyInternalId())
+				.getResultList();
+
+		// Without exactly one match there is no farmer the plots demonstrably belong to, so the row
+		// stays reported as a duplicate instead of the plots being attached to a guess.
+		if (matchingFarmers.size() != 1) {
+			return false;
+		}
+
+		UserCustomer existingFarmer = matchingFarmers.get(0);
+
+		for (ApiPlot apiPlot : apiUserCustomer.getPlots()) {
+
+			Plot plot = new Plot();
+			plot.setPlotName(apiPlot.getPlotName());
+			if (apiPlot.getCrop() != null) {
+				plot.setCrop(fetchProductType(apiPlot.getCrop().getId()));
+			}
+			plot.setNumberOfPlants(apiPlot.getNumberOfPlants());
+			plot.setUnit(apiPlot.getUnit());
+			plot.setSize(apiPlot.getSize());
+			plot.setOrganicStartOfTransition(apiPlot.getOrganicStartOfTransition());
+			plot.setFarmer(existingFarmer);
+			plot.setLastUpdated(new Date());
+
+			for (ApiPlotCoordinate apiPlotCoordinate : apiPlot.getCoordinates()) {
+				PlotCoordinate plotCoordinate = new PlotCoordinate();
+				plotCoordinate.setLatitude(apiPlotCoordinate.getLatitude());
+				plotCoordinate.setLongitude(apiPlotCoordinate.getLongitude());
+				plotCoordinate.setPlot(plot);
+				plot.getCoordinates().add(plotCoordinate);
+			}
+
+			// Generate Plot GeoID
+			plot.setGeoId(generatePlotGeoID(plot.getCoordinates()));
+
+			existingFarmer.getPlots().add(plot);
+		}
+
+		return true;
+	}
+
 	public ApiPaginatedList<ApiUserCustomer> getUserCustomersForCompanyAndType(Long companyId,
 	                                                                           UserCustomerType type,
 	                                                                           ApiListFarmersRequest request,

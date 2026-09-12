@@ -270,7 +270,7 @@ public class UserCustomerImportService extends BaseService {
      * Persists the farmers an import produced, unless the file had validation errors - in which
      * case nothing at all is persisted, so a partly-rejected file never leaves half its farmers
      * behind. Farmers that already exist are reported back as duplicates for the user to accept or
-     * reject.
+     * reject, but their new plots are attached straight away.
      */
     private void persistFarmers(List<ApiUserCustomer> farmers,
                                 Long companyId,
@@ -297,6 +297,13 @@ public class UserCustomerImportService extends BaseService {
             for (ApiUserCustomer apiUserCustomer : toAdd) {
                 companyService.addUserCustomer(companyId, apiUserCustomer, authUser, language);
                 successful++;
+            }
+
+            // Farmers already on file: their plots are attached to the farmer that is already
+            // there. A failure here is reported to the caller rather than dropped, so an import
+            // never claims to have succeeded while losing plots.
+            for (ApiUserCustomer duplicate : duplicates) {
+                companyService.addPlotsToExistingFarmer(companyId, duplicate);
             }
 
             response.setDuplicates(duplicates);

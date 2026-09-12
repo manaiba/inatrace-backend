@@ -294,6 +294,72 @@ class FarmerImportGeoDataEndToEndTest {
         });
     }
 
+    // ---------------------------------------------------------------- re-imported farmers
+
+    private static final String FIRST_PLOT =
+            "POLYGON((5.1717367 10.2352433, 5.1718067 10.235235, 5.1719302 10.2352027))";
+
+    private static final String SECOND_PLOT =
+            "POLYGON((5.2000000 10.3000000, 5.2100000 10.3100000, 5.2200000 10.3000000))";
+
+    @Test
+    void reimportedFarmerWithInternalId_getsItsNewPlotAttachedInsteadOfATwin() throws Exception {
+        String internalId = runId + "-reimport";
+
+        JsonNode first = callImportEndpoint(uploadDocument(buildWorkbook(internalId, FIRST_PLOT)));
+        assertEquals(1, first.get("successful").asInt(), "first import: " + first);
+
+        JsonNode second = callImportEndpoint(uploadDocument(buildWorkbook(internalId, SECOND_PLOT)));
+
+        assertEquals(0, second.get("successful").asInt(), "the farmer is not created a second time: " + second);
+        assertTrue(second.get("validationErrors").isEmpty(), "expected no validation errors: " + second);
+        assertEquals(1, second.get("duplicates").size(), "the row is reported as a duplicate: " + second);
+        assertEquals(internalId, second.get("duplicates").get(0).get("farmerCompanyInternalId").asText());
+
+        tx().executeWithoutResult(status -> {
+            assertEquals(1L, countFarmersByInternalId(internalId), "still exactly one farmer with this id");
+
+            UserCustomer farmer = farmerByInternalId(internalId);
+            assertEquals(2, farmer.getPlots().size(), "the second file's plot was attached to the existing farmer");
+
+            List<Plot> plots = farmer.getPlots().stream()
+                    .sorted((a, b) -> a.getId().compareTo(b.getId()))
+                    .toList();
+            List<PlotCoordinate> original = orderedCoordinates(plots.get(0).getCoordinates());
+            List<PlotCoordinate> attached = orderedCoordinates(plots.get(1).getCoordinates());
+
+            assertEquals(5.171737, original.get(0).getLatitude());
+            assertEquals(10.235243, original.get(0).getLongitude());
+            assertEquals(3, attached.size());
+            assertEquals(5.2, attached.get(0).getLatitude());
+            assertEquals(10.3, attached.get(0).getLongitude());
+            assertEquals(5.22, attached.get(2).getLatitude());
+            assertEquals(10.3, attached.get(2).getLongitude());
+        });
+    }
+
+    @Test
+    void reimportedFarmerWithoutInternalId_isOnlyReportedAsDuplicate_nothingAttached() throws Exception {
+        JsonNode first = callImportEndpoint(uploadDocument(buildWorkbook(null, FIRST_PLOT)));
+        assertEquals(1, first.get("successful").asInt(), "first import: " + first);
+
+        // Same name, surname and city, so it is a duplicate - but with no internal id there is no
+        // farmer the plot demonstrably belongs to.
+        JsonNode second = callImportEndpoint(uploadDocument(buildWorkbook(null, SECOND_PLOT)));
+
+        assertEquals(0, second.get("successful").asInt(), "the farmer is not created a second time: " + second);
+        assertEquals(1, second.get("duplicates").size(), "the row is reported as a duplicate: " + second);
+
+        tx().executeWithoutResult(status -> {
+            List<UserCustomer> farmers = farmersOfTestCompany();
+            assertEquals(1, farmers.size(), "still exactly one farmer");
+            assertEquals(1, farmers.get(0).getPlots().size(), "the second file's plot was not attached");
+
+            List<PlotCoordinate> coordinates = orderedCoordinates(farmers.get(0).getPlots().iterator().next().getCoordinates());
+            assertEquals(5.171737, coordinates.get(0).getLatitude(), "the original plot is untouched");
+        });
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private TransactionTemplate tx() {
@@ -357,7 +423,9 @@ class FarmerImportGeoDataEndToEndTest {
             XSSFSheet sheet = workbook.getSheetAt(0);
             XSSFRow row = sheet.createRow(5); // first data row, per UserCustomerImportService.rowIndex = 5
 
-            row.createCell(0).setCellValue(internalId);
+            if (internalId != null) {
+                row.createCell(0).setCellValue(internalId);
+            }
             row.createCell(1).setCellValue("Tester");
             row.createCell(2).setCellValue("Geo");
             row.createCell(3).setCellValue("Test Village");
