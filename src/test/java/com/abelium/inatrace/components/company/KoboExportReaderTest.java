@@ -10,10 +10,15 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Drives a real KoboToolbox export - the kind of file that motivated reading exports directly.
+ *
+ * <p>The regression this guards is concrete: when the same collection was copied into the INATrace
+ * template by hand, the plots of three farmers ended up on the wrong rows and Bam.tsomelou's second
+ * parcel was lost. Read from the export, all 7 farmers and all 10 plots survive.</p>
  */
 class KoboExportReaderTest {
 
@@ -52,6 +57,47 @@ class KoboExportReaderTest {
 		assertEquals("Féminin", first.get(KoboExportReader.Concept.GENDER));
 		assertEquals("654787309", first.get(KoboExportReader.Concept.PHONE));
 		assertEquals("Oui", first.get(KoboExportReader.Concept.SMARTPHONE));
+	}
+
+	@Test
+	void everyFarmerAndEveryPlotOfTheRealExportIsRead() throws Exception {
+		KoboExportReader.KoboExport export = read();
+
+		assertTrue(export.getMissingConcepts().isEmpty(),
+				"unmatched fields: " + export.getMissingConcepts() + " in " + export.getHeaders());
+		assertEquals(7, export.getFarmers().size(), "farmers");
+
+		int plots = export.getFarmers().stream().mapToInt(f -> f.getPlots().size()).sum();
+		assertEquals(10, plots, "plots across all farmers");
+	}
+
+	@Test
+	void multiPlotFarmersKeepEveryPlot() throws Exception {
+		Map<String, Integer> plotsByFarmer = read().getFarmers().stream().collect(
+				java.util.stream.Collectors.toMap(
+						f -> f.get(KoboExportReader.Concept.LAST_NAME).trim(),
+						f -> f.getPlots().size()));
+
+		assertEquals(1, plotsByFarmer.get("Gadji épouse"));
+		assertEquals(2, plotsByFarmer.get("Bam. Keubou"));
+		assertEquals(1, plotsByFarmer.get("Bam. Fopa"));
+		// The parcel the hand-copied template lost is the third one here.
+		assertEquals(3, plotsByFarmer.get("Bam.tsomelou"));
+	}
+
+	@Test
+	void plotGeometryAndSurveyedSizeAreRead() throws Exception {
+		KoboExportReader.KoboFarmer first = read().getFarmers().get(0);
+		KoboExportReader.KoboPlot plot = first.getPlots().get(0);
+
+		assertNotNull(plot.getGeoData());
+		List<GeoDataParser.ParsedPlot> parsed = GeoDataParser.parse(plot.getGeoData(), "CM");
+		assertEquals(1, parsed.size());
+		assertEquals(GeoDataParser.GeoDataType.POLYGON, parsed.get(0).getType());
+		assertEquals(28, parsed.get(0).getPoints().size());
+
+		assertEquals(2.0, plot.getSize(), "surveyed total plot size in ha");
+		assertEquals(200, plot.getNumberOfPlants());
 	}
 
 	@Test
