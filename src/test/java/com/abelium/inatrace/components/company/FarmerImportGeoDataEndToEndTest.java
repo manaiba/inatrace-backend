@@ -14,6 +14,7 @@ import com.abelium.inatrace.db.entities.value_chain.ValueChain;
 import com.abelium.inatrace.db.entities.value_chain.enums.ValueChainStatus;
 import com.abelium.inatrace.types.CompanyStatus;
 import com.abelium.inatrace.types.CompanyUserRole;
+import com.abelium.inatrace.types.Gender;
 import com.abelium.inatrace.types.Language;
 import com.abelium.inatrace.types.UserRole;
 import com.abelium.inatrace.types.UserStatus;
@@ -347,6 +348,49 @@ class FarmerImportGeoDataEndToEndTest {
             Double size = farmer(farmers, "Gadji épouse").getPlots().iterator().next().getSize();
             // ~6685 m². In hectares that is 0.66 - the pre-fix code stored 6.68.
             assertTrue(size > 0.6 && size < 0.7, "plot size should be in hectares, was " + size);
+        });
+    }
+
+    // ---------------------------------------------------------------- KoboToolbox export
+
+    /**
+     * The same collection read straight from its KoboToolbox export, with no re-keying at all.
+     *
+     * <p>The export links each plot to its submission, so the two plots that the hand copy filed
+     * against the wrong farmer land where they belong.</p>
+     */
+    @Test
+    void realKoboExport_attributesEveryPlotToTheRightFarmer() throws Exception {
+        byte[] xlsx = Files.readAllBytes(Paths.get(RESOURCES + "kobo_export_multi_plot.xlsx"));
+
+        JsonNode response = callImportEndpoint(uploadDocument(xlsx));
+
+        assertTrue(response.get("validationErrors").isEmpty(), "expected no validation errors: " + response);
+        assertEquals(7, response.get("successful").asInt(), "farmers imported: " + response);
+
+        tx().executeWithoutResult(status -> {
+            List<UserCustomer> farmers = farmersOfTestCompany();
+
+            assertEquals(7, farmers.size());
+            assertEquals(10, totalPlots(farmers), "every plot of every repeat group: " + plotDistribution(farmers));
+
+            // The hand-copied template gives these 1 / 1 / 4; the export gives the true 2 / 1 / 3.
+            assertEquals(2, farmer(farmers, "Bam. Keubou").getPlots().size());
+            assertEquals(1, farmer(farmers, "Bam. Fopa").getPlots().size());
+            assertEquals(3, farmer(farmers, "Bam.tsomelou").getPlots().size());
+
+            UserCustomer first = farmer(farmers, "Gadji épouse");
+            assertEquals("Cameroon", first.getUserCustomerLocation().getAddress().getCountry().getName(),
+                    "the export names the country instead of using its ISO code");
+            assertEquals("Tchugueleu", first.getName());
+            assertEquals(Gender.FEMALE, first.getGender(), "\"Féminin\" is read as a gender");
+            assertEquals(Boolean.TRUE, first.getHasSmartphone(), "\"Oui\" is read as yes");
+
+            Plot plot = first.getPlots().iterator().next();
+            assertEquals(28, plot.getCoordinates().size(), "the geoshape's 28 vertices are all stored");
+            assertEquals(2.0, plot.getSize(), "the surveyed size wins over the computed area");
+            assertEquals("ha", plot.getUnit());
+            assertEquals(200, plot.getNumberOfPlants());
         });
     }
 
