@@ -19,6 +19,7 @@ import com.abelium.inatrace.types.UserRole;
 import com.abelium.inatrace.types.UserStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.apache.poi.xssf.usermodel.XSSFRow;
@@ -40,6 +41,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.LinkedMultiValueMap;
@@ -50,10 +53,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -77,6 +84,55 @@ class FarmerImportGeoDataEndToEndTest {
     @Container
     @ServiceConnection
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
+
+    // ---------------------------------------------------------------- stub GeoID registry
+
+    /** The one GeoID the stub registry knows. */
+    private static final String KNOWN_GEOID = "018f3b2c-1a4e-8000-9c3d-2b6f5a1e7d40";
+
+    private static final String UNKNOWN_GEOID = "018f3b2c-1a4e-8000-9c3d-000000000000";
+
+    /** What the registry answers for {@link #KNOWN_GEOID}: a triangle near (5.40, 10.40). */
+    private static final String REGISTRY_GEOJSON =
+            "{\"type\":\"Feature\",\"properties\":{},\"geometry\":{\"type\":\"Polygon\",\"coordinates\":"
+                    + "[[[10.40,5.40],[10.41,5.41],[10.42,5.40],[10.40,5.40]]]}}";
+
+    private static final AtomicInteger REGISTRY_REQUESTS = new AtomicInteger();
+
+    /** Started before the Spring context so that {@link #geoIdRegistry} can hand out its port. */
+    private static final HttpServer REGISTRY = startStubRegistry();
+
+    private static HttpServer startStubRegistry() {
+        try {
+            HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/", exchange -> {
+                REGISTRY_REQUESTS.incrementAndGet();
+                byte[] body;
+                int status;
+                if (exchange.getRequestURI().getPath().endsWith(KNOWN_GEOID)) {
+                    body = REGISTRY_GEOJSON.getBytes(StandardCharsets.UTF_8);
+                    status = 200;
+                } else {
+                    body = "{\"detail\":\"not found\"}".getBytes(StandardCharsets.UTF_8);
+                    status = 404;
+                }
+                exchange.getResponseHeaders().add("Content-Type", "application/geo+json");
+                exchange.sendResponseHeaders(status, body.length);
+                try (OutputStream out = exchange.getResponseBody()) {
+                    out.write(body);
+                }
+            });
+            server.start();
+            return server;
+        } catch (Exception e) {
+            throw new IllegalStateException("could not start the stub GeoID registry", e);
+        }
+    }
+
+    @DynamicPropertySource
+    static void geoIdRegistry(DynamicPropertyRegistry registry) {
+        registry.add("INATrace.geoid.baseURL", () -> "http://127.0.0.1:" + REGISTRY.getAddress().getPort());
+    }
 
     private static final String RESOURCES = "src/test/resources/farmer-import/";
 
@@ -360,6 +416,111 @@ class FarmerImportGeoDataEndToEndTest {
         });
     }
 
+    // ---------------------------------------------------------------- GeoID column
+
+    @Test
+    void knownGeoId_withoutGeoData_getsItsBoundaryFromTheRegistry() throws Exception {
+        String internalId = runId + "-geoid";
+        REGISTRY_REQUESTS.set(0);
+
+        JsonNode response = callImportEndpoint(uploadDocument(
+                buildWorkbook(List.of(new FarmerRow(internalId, "Tester", null, KNOWN_GEOID)))));
+
+        assertEquals(1, response.get("successful").asInt(), "expected exactly 1 farmer imported: " + response);
+        assertTrue(response.get("validationErrors").isEmpty(), "expected no validation errors: " + response);
+        assertEquals(1, REGISTRY_REQUESTS.get(), "the registry was asked for the GeoID");
+
+        tx().executeWithoutResult(status -> {
+            UserCustomer farmer = farmerByInternalId(internalId);
+
+            assertEquals(1, farmer.getPlots().size());
+            Plot plot = farmer.getPlots().iterator().next();
+            List<PlotCoordinate> coordinates = orderedCoordinates(plot.getCoordinates());
+
+            // The registry's GeoJSON is [lon, lat]; the plot stores it as lat/lon in the given order.
+            assertEquals(4, coordinates.size());
+            assertEquals(5.40, coordinates.get(0).getLatitude());
+            assertEquals(10.40, coordinates.get(0).getLongitude());
+            assertEquals(5.41, coordinates.get(1).getLatitude());
+            assertEquals(10.41, coordinates.get(1).getLongitude());
+            assertEquals("ha", plot.getUnit());
+            // Note: the GeoID the import put on the ApiPlot does not survive persistence -
+            // CompanyService.addUserCustomer replaces it with generatePlotGeoID (AgStack), which is
+            // null while AgStack is unconfigured, as it is here.
+        });
+    }
+
+    @Test
+    void unknownGeoId_withGeoData_fallsBackToTheCell() throws Exception {
+        String internalId = runId + "-geoid-fallback";
+        REGISTRY_REQUESTS.set(0);
+
+        JsonNode response = callImportEndpoint(uploadDocument(
+                buildWorkbook(List.of(new FarmerRow(internalId, "Tester", FIRST_PLOT, UNKNOWN_GEOID)))));
+
+        assertEquals(1, response.get("successful").asInt(), "expected exactly 1 farmer imported: " + response);
+        assertTrue(response.get("validationErrors").isEmpty(), "expected no validation errors: " + response);
+        assertEquals(1, REGISTRY_REQUESTS.get(), "the registry was asked, and answered 404");
+
+        tx().executeWithoutResult(status -> {
+            UserCustomer farmer = farmerByInternalId(internalId);
+
+            assertEquals(1, farmer.getPlots().size());
+            List<PlotCoordinate> coordinates = orderedCoordinates(farmer.getPlots().iterator().next().getCoordinates());
+
+            // The Geo Data cell's own triangle, not the registry's.
+            assertEquals(3, coordinates.size());
+            assertEquals(5.171737, coordinates.get(0).getLatitude());
+            assertEquals(10.235243, coordinates.get(0).getLongitude());
+        });
+    }
+
+    @Test
+    void malformedGeoId_isRejectedAsInvalidGeodata() throws Exception {
+        String internalId = runId + "-geoid-malformed";
+        REGISTRY_REQUESTS.set(0);
+
+        JsonNode response = callImportEndpoint(uploadDocument(
+                buildWorkbook(List.of(new FarmerRow(internalId, "Tester", null, "not-a-geoid")))));
+
+        assertEquals(0, response.get("successful").asInt(), "expected no farmers imported: " + response);
+        assertEquals(1, response.get("validationErrors").size(), "expected exactly 1 row validation error: " + response);
+
+        JsonNode columnErrors = response.get("validationErrors").get(0).get("columnValidationErrors");
+        assertEquals(1, columnErrors.size());
+        assertEquals("INVALID_GEODATA", columnErrors.get(0).get("errorType").asText());
+        assertEquals("AI6", columnErrors.get(0).get("cellAddress").asText());
+        assertEquals(0, REGISTRY_REQUESTS.get(), "a malformed id never reaches the registry");
+
+        assertEquals(0L, countFarmersByInternalId(internalId), "no farmer should have been persisted for a rejected row");
+    }
+
+    @Test
+    void rowsSharingAGeoId_hitTheRegistryOnce() throws Exception {
+        String firstId = runId + "-shared-1";
+        String secondId = runId + "-shared-2";
+        REGISTRY_REQUESTS.set(0);
+
+        JsonNode response = callImportEndpoint(uploadDocument(buildWorkbook(List.of(
+                new FarmerRow(firstId, "Tester", null, KNOWN_GEOID),
+                new FarmerRow(secondId, "Other", null, KNOWN_GEOID)))));
+
+        assertEquals(2, response.get("successful").asInt(), "expected 2 farmers imported: " + response);
+        assertTrue(response.get("validationErrors").isEmpty(), "expected no validation errors: " + response);
+        assertEquals(1, REGISTRY_REQUESTS.get(), "one lookup per distinct GeoID per file");
+
+        tx().executeWithoutResult(status -> {
+            for (String internalId : List.of(firstId, secondId)) {
+                UserCustomer farmer = farmerByInternalId(internalId);
+                assertEquals(1, farmer.getPlots().size(), internalId);
+                List<PlotCoordinate> coordinates = orderedCoordinates(farmer.getPlots().iterator().next().getCoordinates());
+                assertEquals(4, coordinates.size(), internalId);
+                assertEquals(5.40, coordinates.get(0).getLatitude(), internalId);
+                assertEquals(10.40, coordinates.get(0).getLongitude(), internalId);
+            }
+        });
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private TransactionTemplate tx() {
@@ -415,45 +576,63 @@ class FarmerImportGeoDataEndToEndTest {
                 .getSingleResult();
     }
 
+    /** One data row of a built workbook; {@code null} leaves the corresponding cell blank. */
+    private record FarmerRow(String internalId, String surname, String geoData, String geoId) {
+    }
+
     /** Builds a single-data-row copy of the real shipped template, matching a realistic full farmer entry. */
     private byte[] buildWorkbook(String internalId, String geoData) throws Exception {
+        return buildWorkbook(List.of(new FarmerRow(internalId, "Tester", geoData, null)));
+    }
+
+    /** Builds a copy of the real shipped template with one data row per {@link FarmerRow}. */
+    private byte[] buildWorkbook(List<FarmerRow> rows) throws Exception {
         try (var in = new FileInputStream(TEMPLATE_PATH);
              XSSFWorkbook workbook = new XSSFWorkbook(in)) {
 
             XSSFSheet sheet = workbook.getSheetAt(0);
-            XSSFRow row = sheet.createRow(5); // first data row, per UserCustomerImportService.rowIndex = 5
+            int rowIndex = 5; // first data row, per UserCustomerImportService.rowIndex = 5
 
-            if (internalId != null) {
-                row.createCell(0).setCellValue(internalId);
+            for (FarmerRow farmerRow : rows) {
+                XSSFRow row = sheet.createRow(rowIndex++);
+
+                if (farmerRow.internalId() != null) {
+                    row.createCell(0).setCellValue(farmerRow.internalId());
+                }
+                row.createCell(1).setCellValue(farmerRow.surname());
+                row.createCell(2).setCellValue("Geo");
+                row.createCell(3).setCellValue("Test Village");
+                row.createCell(4).setCellValue("Test Cell");
+                row.createCell(5).setCellValue("Test Sector");
+                // 6 Caserio, 7 Aldea, 8 Municipio, 9 Departamento - Honduras-only, left blank
+                row.createCell(10).setCellValue("123 Test Street");
+                row.createCell(11).setCellValue("Testville");
+                row.createCell(12).setCellValue("Test Region");
+                row.createCell(13).setCellValue("00000");
+                // 14 additional address - left blank
+                row.createCell(15).setCellValue("ZZ");
+                row.createCell(16).setCellValue("F");
+                row.createCell(17).setCellValue("555123456");
+                row.createCell(18).setCellValue(runId + "@farmer.test");
+                row.createCell(19).setCellValue("Y");
+                row.createCell(20).setCellValue("ha");
+                row.createCell(21).setCellValue(2.5);
+                row.createCell(22).setCellValue(2.5);
+                row.createCell(23).setCellValue(1000);
+                // 24/25 second product type - left blank (template has no second product type column)
+                row.createCell(26).setCellValue("N");
+                // 27 area organic certified, 28 start of transition - left blank
+                row.createCell(29).setCellValue("00123456789");
+                row.createCell(30).setCellValue("Geo Tester");
+                row.createCell(31).setCellValue("Test Bank");
+                row.createCell(32).setCellValue("none");
+                if (farmerRow.geoData() != null) {
+                    row.createCell(33).setCellValue(farmerRow.geoData());
+                }
+                if (farmerRow.geoId() != null) {
+                    row.createCell(34).setCellValue(farmerRow.geoId());
+                }
             }
-            row.createCell(1).setCellValue("Tester");
-            row.createCell(2).setCellValue("Geo");
-            row.createCell(3).setCellValue("Test Village");
-            row.createCell(4).setCellValue("Test Cell");
-            row.createCell(5).setCellValue("Test Sector");
-            // 6 Caserio, 7 Aldea, 8 Municipio, 9 Departamento - Honduras-only, left blank
-            row.createCell(10).setCellValue("123 Test Street");
-            row.createCell(11).setCellValue("Testville");
-            row.createCell(12).setCellValue("Test Region");
-            row.createCell(13).setCellValue("00000");
-            // 14 additional address - left blank
-            row.createCell(15).setCellValue("ZZ");
-            row.createCell(16).setCellValue("F");
-            row.createCell(17).setCellValue("555123456");
-            row.createCell(18).setCellValue(runId + "@farmer.test");
-            row.createCell(19).setCellValue("Y");
-            row.createCell(20).setCellValue("ha");
-            row.createCell(21).setCellValue(2.5);
-            row.createCell(22).setCellValue(2.5);
-            row.createCell(23).setCellValue(1000);
-            // 24/25 second product type - left blank (template has no second product type column)
-            row.createCell(26).setCellValue("N");
-            // 27 area organic certified, 28 start of transition - left blank
-            row.createCell(29).setCellValue("00123456789");
-            row.createCell(30).setCellValue("Geo Tester");
-            row.createCell(31).setCellValue("Test Bank");
-            row.createCell(32).setCellValue("none");
-            row.createCell(33).setCellValue(geoData);
 
             try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
                 workbook.write(out);

@@ -8,6 +8,7 @@ import com.abelium.inatrace.components.common.DocumentData;
 import com.abelium.inatrace.components.common.StorageService;
 import com.abelium.inatrace.components.company.api.*;
 import com.abelium.inatrace.components.company.types.UserCustomerImportCellErrorType;
+import com.abelium.inatrace.components.geoid.FaoGeoIdClientService;
 import com.abelium.inatrace.components.product.ProductTypeMapper;
 import com.abelium.inatrace.components.product.api.ApiBankInformation;
 import com.abelium.inatrace.components.product.api.ApiFarmInformation;
@@ -58,14 +59,20 @@ public class UserCustomerImportService extends BaseService {
     @Autowired
     private StorageService storageService;
 
+    @Autowired
+    private FaoGeoIdClientService faoGeoIdClientService;
+
     /**
      * Column index of the "Geo Data" cell, which accepts any of the formats
      * {@link GeoDataParser} recognises.
      */
     static final int GEO_DATA_COLUMN = 33;
 
+    /** Column index of the "GeoID (FAO)" cell, appended after {@link #GEO_DATA_COLUMN}. */
+    static final int GEO_ID_COLUMN = 34;
+
     /** Highest column index the importer reads. */
-    private static final int LAST_COLUMN = GEO_DATA_COLUMN;
+    private static final int LAST_COLUMN = GEO_ID_COLUMN;
 
     private static final String PLOT_NAME_PREFIX = "Plot ";
 
@@ -101,6 +108,10 @@ public class UserCustomerImportService extends BaseService {
         // their own farmer - keying the map on null would merge the whole file into a single farmer.
         Map<String, ApiUserCustomer> farmersMap = new HashMap<>();
         List<ApiUserCustomer> farmers = new ArrayList<>();
+
+        // A GeoID always resolves to the same boundary, so resolve each distinct one only once per
+        // file rather than once per row that references it.
+        Map<String, List<ApiPlot>> geoIdCache = new HashMap<>();
 
         // company product types (first two)
         List<ApiProductType> companyProductTypes = readCompanyProductTypes(companyId, language);
@@ -146,12 +157,13 @@ public class UserCustomerImportService extends BaseService {
                 } else if (lastFarmer == null) {
                     // No farmer above to attach these plots to.
                     geoValidation.getColumnValidationErrors().add(new ApiUserCustomerImportColumnValidationError(
-                            getCellAddress(row.getCell(GEO_DATA_COLUMN)),
+                            getCellAddress(row.getCell(GEO_DATA_COLUMN) != null
+                                    ? row.getCell(GEO_DATA_COLUMN) : row.getCell(GEO_ID_COLUMN)),
                             UserCustomerImportCellErrorType.INVALID_GEODATA));
                     response.getValidationErrors().add(geoValidation);
                 } else {
                     addPlotsToFarmer(lastFarmer,
-                            createUserGeoData(row, companyProductTypes.get(0).getId()));
+                            createUserGeoData(row, companyProductTypes.get(0).getId(), geoIdCache));
                 }
 
                 rowIndex++;
@@ -169,7 +181,7 @@ public class UserCustomerImportService extends BaseService {
                 if (groupable && farmersMap.containsKey(internalId)) {
                     ApiUserCustomer existingFarmer = farmersMap.get(internalId);
                     addPlotsToFarmer(existingFarmer,
-                            createUserGeoData(row, companyProductTypes.get(0).getId()));
+                            createUserGeoData(row, companyProductTypes.get(0).getId(), geoIdCache));
                     lastFarmer = existingFarmer;
                 } else {
 
@@ -242,8 +254,8 @@ public class UserCustomerImportService extends BaseService {
                     apiUserCustomer.getBank().setBankName(getStringOrNumeric(row.getCell(31)));
                     apiUserCustomer.getBank().setAdditionalInformation(getStringOrNumeric(row.getCell(32)));
 
-                    // GeoData - plots from the Geo Data cell
-                    apiUserCustomer.setPlots(createUserGeoData(row, companyProductTypes.get(0).getId()));
+                    // GeoData - from the Geo Data cell, the GeoID cell, or both
+                    apiUserCustomer.setPlots(createUserGeoData(row, companyProductTypes.get(0).getId(), geoIdCache));
                     nameFarmerPlots(apiUserCustomer);
 
                     if (groupable) {
@@ -571,8 +583,8 @@ public class UserCustomerImportService extends BaseService {
     }
 
     /**
-     * Validates the Geo Data cell. It is optional; when present, it must parse as one of the
-     * formats {@link GeoDataParser} supports.
+     * Validates the Geo Data and GeoID cells. Both are optional; when present, Geo Data must parse
+     * as one of the formats {@link GeoDataParser} supports and the GeoID must look like a GeoID.
      */
     private void validateGeoCells(Row row, ApiUserCustomerImportRowValidationError rowValidation) {
 
@@ -588,6 +600,15 @@ public class UserCustomerImportService extends BaseService {
                 }
             }
         }
+
+        Cell geoIdCell = row.getCell(GEO_ID_COLUMN);
+        if (!emptyCell(geoIdCell)) {
+            if (invalidCell(geoIdCell, List.of(CellType.STRING))) {
+                rowValidation.getColumnValidationErrors().add(new ApiUserCustomerImportColumnValidationError(getCellAddress(geoIdCell), UserCustomerImportCellErrorType.INCORRECT_TYPE));
+            } else if (!FaoGeoIdClientService.isGeoIdFormat(geoIdCell.getStringCellValue().trim())) {
+                rowValidation.getColumnValidationErrors().add(new ApiUserCustomerImportColumnValidationError(getCellAddress(geoIdCell), UserCustomerImportCellErrorType.INVALID_GEODATA));
+            }
+        }
     }
 
     /**
@@ -597,7 +618,7 @@ public class UserCustomerImportService extends BaseService {
      */
     private boolean geoOnlyRow(Row row) {
 
-        if (emptyCell(row.getCell(GEO_DATA_COLUMN))) {
+        if (emptyCell(row.getCell(GEO_DATA_COLUMN)) && emptyCell(row.getCell(GEO_ID_COLUMN))) {
             return false;
         }
         for (int i = 0; i < GEO_DATA_COLUMN; i++) {
@@ -687,14 +708,73 @@ public class UserCustomerImportService extends BaseService {
 
 
     /**
-     * Builds the plots for one spreadsheet row from its Geo Data cell.
+     * Builds the plots for one spreadsheet row from its Geo Data cell, its GeoID cell, or both.
+     *
+     * <p>When a GeoID is present it wins: it is the registry's immutable handle for the boundary,
+     * so its geometry is authoritative and interoperable. If it cannot be resolved - unknown id,
+     * registry unreachable, or resolution disabled - the row falls back to whatever geometry the
+     * Geo Data cell carried, so a registry outage never costs an import. Either way the GeoID
+     * itself is kept on the plot.</p>
      */
-    private List<ApiPlot> createUserGeoData(Row row, Long productTypeId) throws ApiException {
+    private List<ApiPlot> createUserGeoData(Row row, Long productTypeId, Map<String, List<ApiPlot>> geoIdCache)
+            throws ApiException {
 
         String countryCode = getString(row.getCell(15));
+        String geoId = emptyCell(row.getCell(GEO_ID_COLUMN)) ? null : row.getCell(GEO_ID_COLUMN).getStringCellValue().trim();
         String geoData = emptyCell(row.getCell(GEO_DATA_COLUMN)) ? null : row.getCell(GEO_DATA_COLUMN).getStringCellValue().trim();
 
-        return buildPlots(geoData, countryCode, productTypeId);
+        List<ApiPlot> plots = new ArrayList<>();
+
+        if (geoId != null && !geoId.isBlank()) {
+            for (ApiPlot resolved : resolveGeoId(geoId, productTypeId, geoIdCache)) {
+                plots.add(copyPlot(resolved));
+            }
+            if (!plots.isEmpty()) {
+                return plots;
+            }
+            logger.warn("GeoID {} could not be resolved; falling back to the Geo Data cell", geoId);
+        }
+
+        plots.addAll(buildPlots(geoData, countryCode, productTypeId));
+
+        // Keep the identifier even when its geometry could not be fetched, so the plot stays linked
+        // to the registry entry and can be refreshed later.
+        if (geoId != null && !geoId.isBlank()) {
+            plots.forEach(plot -> plot.setGeoId(geoId));
+        }
+
+        return plots;
+    }
+
+    /**
+     * Resolves a GeoID to plots, at most once per distinct identifier per imported file. Returns an
+     * empty list when the registry is not configured, does not know the identifier, or cannot be
+     * reached - the caller then falls back to the row's own Geo Data cell.
+     */
+    private List<ApiPlot> resolveGeoId(String geoId, Long productTypeId, Map<String, List<ApiPlot>> geoIdCache) {
+
+        List<ApiPlot> cached = geoIdCache.get(geoId);
+        if (cached != null) {
+            return cached;
+        }
+
+        List<ApiPlot> resolved = List.of();
+        String geoJson = faoGeoIdClientService.resolveGeoJson(geoId);
+
+        if (geoJson != null && !geoJson.isBlank()) {
+            try {
+                resolved = buildPlots(geoJson, null, productTypeId);
+                resolved.forEach(plot -> plot.setGeoId(geoId));
+            } catch (ApiException e) {
+                // The registry, not the user, produced this geometry, so the row falls back to its
+                // own Geo Data cell rather than being rejected over something it cannot fix.
+                logger.warn("GeoID {} resolved to geometry that could not be read: {}", geoId, e.getMessage());
+                resolved = List.of();
+            }
+        }
+
+        geoIdCache.put(geoId, resolved);
+        return resolved;
     }
 
     /**
@@ -796,6 +876,28 @@ public class UserCustomerImportService extends BaseService {
         }
         farmer.getPlots().addAll(newPlots);
         nameFarmerPlots(farmer);
+    }
+
+    /** Shallow copy of a cached plot, so rows sharing a GeoID do not share mutable plot objects. */
+    private ApiPlot copyPlot(ApiPlot source) {
+
+        ApiPlot copy = new ApiPlot();
+        copy.setPlotName(source.getPlotName());
+        copy.setGeoId(source.getGeoId());
+        copy.setSize(source.getSize());
+        copy.setUnit(source.getUnit());
+        copy.setCrop(source.getCrop());
+
+        if (source.getCoordinates() != null) {
+            copy.setCoordinates(source.getCoordinates().stream().map(coordinate -> {
+                ApiPlotCoordinate copiedCoordinate = new ApiPlotCoordinate();
+                copiedCoordinate.setLatitude(coordinate.getLatitude());
+                copiedCoordinate.setLongitude(coordinate.getLongitude());
+                return copiedCoordinate;
+            }).collect(Collectors.toList()));
+        }
+
+        return copy;
     }
 
 }
