@@ -50,8 +50,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -75,8 +78,9 @@ class FarmerImportGeoDataEndToEndTest {
     @ServiceConnection
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4");
 
-    private static final String TEMPLATE_PATH =
-            "src/test/resources/farmer-import/Template_list_of_farmers_other_countries_en.xlsx";
+    private static final String RESOURCES = "src/test/resources/farmer-import/";
+
+    private static final String TEMPLATE_PATH = RESOURCES + "Template_list_of_farmers_other_countries_en.xlsx";
 
     @Autowired
     private TestRestTemplate rest;
@@ -250,10 +254,74 @@ class FarmerImportGeoDataEndToEndTest {
         });
     }
 
+    // ---------------------------------------------------------------- continuation rows
+
+    /**
+     * A real, hand-filled template, uploaded byte-for-byte as the user has it: no internal
+     * ids anywhere, ODK geoshape in every geo cell, and a trailing row that carries nothing but
+     * three more plots written as {@code P1(...)P2 (...)P3(...)}.
+     *
+     * <p>Every plot of the collection survives the hand copy, but three of them ended up against
+     * the wrong farmer - which the importer cannot detect and faithfully reproduces.</p>
+     */
+    @Test
+    void realFilledTemplate_importsEveryFarmerAndEveryPlot() throws Exception {
+        byte[] xlsx = Files.readAllBytes(Paths.get(RESOURCES + "filled_template_multi_plot.xlsx"));
+
+        JsonNode response = callImportEndpoint(uploadDocument(xlsx));
+
+        assertTrue(response.get("validationErrors").isEmpty(), "expected no validation errors: " + response);
+        // 7 named rows, each its own farmer despite every internal-id cell being empty.
+        assertEquals(7, response.get("successful").asInt(), "farmers imported: " + response);
+
+        tx().executeWithoutResult(status -> {
+            List<UserCustomer> farmers = farmersOfTestCompany();
+
+            assertEquals(7, farmers.size(), "one farmer per named row, not one farmer for the whole file");
+            assertEquals(10, totalPlots(farmers),
+                    "7 rows with one plot each, plus the 3 plots of the trailing geo-only row: "
+                            + plotDistribution(farmers));
+
+            UserCustomer tsomelou = farmer(farmers, "Bam.tsomelou");
+            // 1 of its own + the 3 of the geo-only row that follows it.
+            assertEquals(4, tsomelou.getPlots().size(), "the P1(...)P2 (...)P3(...) row attaches to the farmer above");
+            assertEquals(4, tsomelou.getPlots().stream().map(Plot::getPlotName).distinct().count(),
+                    "plots of one farmer get distinct names");
+
+            Double size = farmer(farmers, "Gadji épouse").getPlots().iterator().next().getSize();
+            // ~6685 m². In hectares that is 0.66 - the pre-fix code stored 6.68.
+            assertTrue(size > 0.6 && size < 0.7, "plot size should be in hectares, was " + size);
+        });
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private TransactionTemplate tx() {
         return new TransactionTemplate(txManager);
+    }
+
+    private List<UserCustomer> farmersOfTestCompany() {
+        return em.createQuery(
+                        "SELECT uc FROM UserCustomer uc WHERE uc.company.id = :companyId", UserCustomer.class)
+                .setParameter("companyId", companyId)
+                .getResultList();
+    }
+
+    private static int totalPlots(List<UserCustomer> farmers) {
+        return farmers.stream().mapToInt(f -> f.getPlots().size()).sum();
+    }
+
+    private static String plotDistribution(List<UserCustomer> farmers) {
+        return farmers.stream()
+                .map(f -> f.getSurname() + "=" + f.getPlots().size())
+                .collect(Collectors.joining(", "));
+    }
+
+    private static UserCustomer farmer(List<UserCustomer> farmers, String surname) {
+        return farmers.stream()
+                .filter(f -> surname.equals(f.getSurname() == null ? null : f.getSurname().trim()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no farmer " + surname + " in " + plotDistribution(farmers)));
     }
 
     /** Plot coordinates in the order they were written, which is the order their ids were assigned. */

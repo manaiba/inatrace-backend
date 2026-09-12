@@ -64,6 +64,9 @@ public class UserCustomerImportService extends BaseService {
      */
     static final int GEO_DATA_COLUMN = 33;
 
+    /** Highest column index the importer reads. */
+    private static final int LAST_COLUMN = GEO_DATA_COLUMN;
+
     private static final String PLOT_NAME_PREFIX = "Plot ";
 
     @Transactional
@@ -92,9 +95,12 @@ public class UserCustomerImportService extends BaseService {
         boolean hasSecondProductType = checkSecondProductType(mainSheet);
 
         int rowIndex = 5;
-        int successful = 0;
-        List<ApiUserCustomer> duplicates = new ArrayList<>();
-        List<ApiUserCustomer> toAdd = new ArrayList<>();
+
+        // Rows are grouped into one farmer only when they share a non-blank company-internal ID.
+        // The ID column is optional and is empty in most real files, so rows without one are each
+        // their own farmer - keying the map on null would merge the whole file into a single farmer.
+        Map<String, ApiUserCustomer> farmersMap = new HashMap<>();
+        List<ApiUserCustomer> farmers = new ArrayList<>();
 
         // company product types (first two)
         List<ApiProductType> companyProductTypes = readCompanyProductTypes(companyId, language);
@@ -114,6 +120,10 @@ public class UserCustomerImportService extends BaseService {
 
         ApiUserCustomerImportResponse response = new ApiUserCustomerImportResponse();
 
+        // The farmer a geo-only continuation row belongs to: the one the row above referred to,
+        // which is not necessarily the one created most recently.
+        ApiUserCustomer lastFarmer = null;
+
         // Go through every row and validate data
         while (true) {
 
@@ -123,89 +133,126 @@ public class UserCustomerImportService extends BaseService {
                 break;
             }
 
+            // A row with geo data and nothing else continues the farmer above rather than starting
+            // a new one, so the farmer columns are not required on it.
+            if (geoOnlyRow(row)) {
+
+                ApiUserCustomerImportRowValidationError geoValidation =
+                        new ApiUserCustomerImportRowValidationError(row.getRowNum());
+                validateGeoCells(row, geoValidation);
+
+                if (!geoValidation.getColumnValidationErrors().isEmpty()) {
+                    response.getValidationErrors().add(geoValidation);
+                } else if (lastFarmer == null) {
+                    // No farmer above to attach these plots to.
+                    geoValidation.getColumnValidationErrors().add(new ApiUserCustomerImportColumnValidationError(
+                            getCellAddress(row.getCell(GEO_DATA_COLUMN)),
+                            UserCustomerImportCellErrorType.INVALID_GEODATA));
+                    response.getValidationErrors().add(geoValidation);
+                } else {
+                    addPlotsToFarmer(lastFarmer,
+                            createUserGeoData(row, companyProductTypes.get(0).getId()));
+                }
+
+                rowIndex++;
+                continue;
+            }
+
             ApiUserCustomerImportRowValidationError rowValidation = validateRow(row);
 
             // If there are no column validation errors, the row is valid
             if (rowValidation.getColumnValidationErrors().isEmpty()) {
+                String internalId = getStringOrNumeric(row.getCell(0));
+                boolean groupable = internalId != null && !internalId.isBlank();
 
-                ApiUserCustomer apiUserCustomer = new ApiUserCustomer();
-                apiUserCustomer.setCompanyId(companyId);
-                apiUserCustomer.setType(UserCustomerType.FARMER);
-                apiUserCustomer.setProductTypes(companyProductTypes);
-
-                // ID (company-internal)
-                apiUserCustomer.setFarmerCompanyInternalId(getStringOrNumeric(row.getCell(0)));
-
-                // Personal data (name, surname, email, phone, etc.)
-                apiUserCustomer.setSurname(getString(row.getCell(1)));
-                apiUserCustomer.setName(getString(row.getCell(2)));
-                apiUserCustomer.setGender(getGender(row.getCell(16)));
-                apiUserCustomer.setPhone(getStringOrNumeric(row.getCell(17)));
-                apiUserCustomer.setEmail(getStringOrNumeric(row.getCell(18)));
-                apiUserCustomer.setHasSmartphone(getBoolean(row.getCell(19)));
-
-                // Address data - location info
-                apiUserCustomer.setLocation(new ApiUserCustomerLocation());
-                apiUserCustomer.getLocation().setAddress(new ApiAddress());
-                apiUserCustomer.getLocation().getAddress().setVillage(getString(row.getCell(3)));
-                apiUserCustomer.getLocation().getAddress().setCell(getString(row.getCell(4)));
-                apiUserCustomer.getLocation().getAddress().setSector(getString(row.getCell(5)));
-                apiUserCustomer.getLocation().getAddress().setHondurasFarm(getString(row.getCell(6)));
-                apiUserCustomer.getLocation().getAddress().setHondurasVillage(getString(row.getCell(7)));
-                apiUserCustomer.getLocation().getAddress().setHondurasMunicipality(getString(row.getCell(8)));
-                apiUserCustomer.getLocation().getAddress().setHondurasDepartment(getString(row.getCell(9)));
-                apiUserCustomer.getLocation().getAddress().setAddress(getString(row.getCell(10)));
-                apiUserCustomer.getLocation().getAddress().setCity(getString(row.getCell(11)));
-                apiUserCustomer.getLocation().getAddress().setState(getString(row.getCell(12)));
-                apiUserCustomer.getLocation().getAddress().setZip(getStringOrNumeric(row.getCell(13)));
-                apiUserCustomer.getLocation().getAddress().setOtherAddress(getString(row.getCell(14)));
-                apiUserCustomer.getLocation().getAddress().setCountry(CommonApiTools.toApiCountry(getCountryByCode(getString(row.getCell(15)))));
-                apiUserCustomer.getLocation().getAddress().getCountry().setCode(getString(row.getCell(15)));
-
-                // Farm info
-                apiUserCustomer.setFarm(new ApiFarmInformation());
-                apiUserCustomer.getFarm().setFarmPlantInformationList(new ArrayList<>());
-                apiUserCustomer.getFarm().setAreaUnit(getString(row.getCell(20)));
-                apiUserCustomer.getFarm().setTotalCultivatedArea(getNumericBigDecimal(row.getCell(21)));
-
-                ApiFarmPlantInformation apiPlant1Information = new ApiFarmPlantInformation();
-                apiPlant1Information.setProductType(companyProductTypes.get(0));
-                apiPlant1Information.setPlantCultivatedArea(getNumericBigDecimal(row.getCell(22)));
-                apiPlant1Information.setNumberOfPlants(getNumericInteger(row.getCell(23)));
-                apiUserCustomer.getFarm().getFarmPlantInformationList().add(apiPlant1Information);
-
-                if (hasSecondProductType && companyProductTypes.get(1) != null) {
-                    ApiFarmPlantInformation apiPlant2Information = new ApiFarmPlantInformation();
-                    apiPlant2Information.setProductType(companyProductTypes.get(1));
-                    apiPlant2Information.setPlantCultivatedArea(getNumericBigDecimal(row.getCell(24)));
-                    apiPlant2Information.setNumberOfPlants(getNumericInteger(row.getCell(25)));
-                    apiUserCustomer.getFarm().getFarmPlantInformationList().add(apiPlant2Information);
-                }
-
-                apiUserCustomer.getFarm().setOrganic(getBoolean(row.getCell(26)));
-                if (apiUserCustomer.getFarm().getOrganic() == null) {
-                    apiUserCustomer.getFarm().setOrganic(false);
-                }
-
-                apiUserCustomer.getFarm().setAreaOrganicCertified(getNumericBigDecimal(row.getCell(27)));
-                apiUserCustomer.getFarm().setStartTransitionToOrganic(getDate(row.getCell(28)));
-
-                // Bank info
-                apiUserCustomer.setBank(new ApiBankInformation());
-                apiUserCustomer.getBank().setAccountNumber(getStringOrNumeric(row.getCell(29)));
-                apiUserCustomer.getBank().setAccountHolderName(getStringOrNumeric(row.getCell(30)));
-                apiUserCustomer.getBank().setBankName(getStringOrNumeric(row.getCell(31)));
-                apiUserCustomer.getBank().setAdditionalInformation(getStringOrNumeric(row.getCell(32)));
-
-                // GeoData - plots from the Geo Data cell
-                apiUserCustomer.setPlots(createUserGeoData(row, companyProductTypes.get(0).getId()));
-                nameFarmerPlots(apiUserCustomer);
-
-                if (companyService.existsUserCustomer(apiUserCustomer)) {
-                    duplicates.add(apiUserCustomer);
+                // A farmer already seen in this file gains the plot of this row instead of a twin
+                if (groupable && farmersMap.containsKey(internalId)) {
+                    ApiUserCustomer existingFarmer = farmersMap.get(internalId);
+                    addPlotsToFarmer(existingFarmer,
+                            createUserGeoData(row, companyProductTypes.get(0).getId()));
+                    lastFarmer = existingFarmer;
                 } else {
-                    toAdd.add(apiUserCustomer);
+
+                    ApiUserCustomer apiUserCustomer = new ApiUserCustomer();
+                    apiUserCustomer.setCompanyId(companyId);
+                    apiUserCustomer.setType(UserCustomerType.FARMER);
+                    apiUserCustomer.setProductTypes(companyProductTypes);
+
+                    // ID (company-internal)
+                    apiUserCustomer.setFarmerCompanyInternalId(getStringOrNumeric(row.getCell(0)));
+
+                    // Personal data (name, surname, email, phone, etc.)
+                    apiUserCustomer.setSurname(getString(row.getCell(1)));
+                    apiUserCustomer.setName(getString(row.getCell(2)));
+                    apiUserCustomer.setGender(getGender(row.getCell(16)));
+                    apiUserCustomer.setPhone(getStringOrNumeric(row.getCell(17)));
+                    apiUserCustomer.setEmail(getStringOrNumeric(row.getCell(18)));
+                    apiUserCustomer.setHasSmartphone(getBoolean(row.getCell(19)));
+
+                    // Address data - location info
+                    apiUserCustomer.setLocation(new ApiUserCustomerLocation());
+                    apiUserCustomer.getLocation().setAddress(new ApiAddress());
+                    apiUserCustomer.getLocation().getAddress().setVillage(getString(row.getCell(3)));
+                    apiUserCustomer.getLocation().getAddress().setCell(getString(row.getCell(4)));
+                    apiUserCustomer.getLocation().getAddress().setSector(getString(row.getCell(5)));
+                    apiUserCustomer.getLocation().getAddress().setHondurasFarm(getString(row.getCell(6)));
+                    apiUserCustomer.getLocation().getAddress().setHondurasVillage(getString(row.getCell(7)));
+                    apiUserCustomer.getLocation().getAddress().setHondurasMunicipality(getString(row.getCell(8)));
+                    apiUserCustomer.getLocation().getAddress().setHondurasDepartment(getString(row.getCell(9)));
+                    apiUserCustomer.getLocation().getAddress().setAddress(getString(row.getCell(10)));
+                    apiUserCustomer.getLocation().getAddress().setCity(getString(row.getCell(11)));
+                    apiUserCustomer.getLocation().getAddress().setState(getString(row.getCell(12)));
+                    apiUserCustomer.getLocation().getAddress().setZip(getStringOrNumeric(row.getCell(13)));
+                    apiUserCustomer.getLocation().getAddress().setOtherAddress(getString(row.getCell(14)));
+                    apiUserCustomer.getLocation().getAddress().setCountry(CommonApiTools.toApiCountry(getCountryByCode(getString(row.getCell(15)))));
+                    apiUserCustomer.getLocation().getAddress().getCountry().setCode(getString(row.getCell(15)));
+
+                    // Farm info
+                    apiUserCustomer.setFarm(new ApiFarmInformation());
+                    apiUserCustomer.getFarm().setFarmPlantInformationList(new ArrayList<>());
+                    apiUserCustomer.getFarm().setAreaUnit(getString(row.getCell(20)));
+                    apiUserCustomer.getFarm().setTotalCultivatedArea(getNumericBigDecimal(row.getCell(21)));
+
+                    ApiFarmPlantInformation apiPlant1Information = new ApiFarmPlantInformation();
+                    apiPlant1Information.setProductType(companyProductTypes.get(0));
+                    apiPlant1Information.setPlantCultivatedArea(getNumericBigDecimal(row.getCell(22)));
+                    apiPlant1Information.setNumberOfPlants(getNumericInteger(row.getCell(23)));
+                    apiUserCustomer.getFarm().getFarmPlantInformationList().add(apiPlant1Information);
+
+                    if (hasSecondProductType && companyProductTypes.get(1) != null) {
+                        ApiFarmPlantInformation apiPlant2Information = new ApiFarmPlantInformation();
+                        apiPlant2Information.setProductType(companyProductTypes.get(1));
+                        apiPlant2Information.setPlantCultivatedArea(getNumericBigDecimal(row.getCell(24)));
+                        apiPlant2Information.setNumberOfPlants(getNumericInteger(row.getCell(25)));
+                        apiUserCustomer.getFarm().getFarmPlantInformationList().add(apiPlant2Information);
+                    }
+
+                    apiUserCustomer.getFarm().setOrganic(getBoolean(row.getCell(26)));
+                    if (apiUserCustomer.getFarm().getOrganic() == null) {
+                        apiUserCustomer.getFarm().setOrganic(false);
+                    }
+
+                    apiUserCustomer.getFarm().setAreaOrganicCertified(getNumericBigDecimal(row.getCell(27)));
+                    apiUserCustomer.getFarm().setStartTransitionToOrganic(getDate(row.getCell(28)));
+
+                    // Bank info
+                    apiUserCustomer.setBank(new ApiBankInformation());
+                    apiUserCustomer.getBank().setAccountNumber(getStringOrNumeric(row.getCell(29)));
+                    apiUserCustomer.getBank().setAccountHolderName(getStringOrNumeric(row.getCell(30)));
+                    apiUserCustomer.getBank().setBankName(getStringOrNumeric(row.getCell(31)));
+                    apiUserCustomer.getBank().setAdditionalInformation(getStringOrNumeric(row.getCell(32)));
+
+                    // GeoData - plots from the Geo Data cell
+                    apiUserCustomer.setPlots(createUserGeoData(row, companyProductTypes.get(0).getId()));
+                    nameFarmerPlots(apiUserCustomer);
+
+                    if (groupable) {
+                        farmersMap.put(internalId, apiUserCustomer);
+                    }
+                    farmers.add(apiUserCustomer);
+                    lastFarmer = apiUserCustomer;
                 }
+
             } else {
 
                 response.getValidationErrors().add(rowValidation);
@@ -214,9 +261,39 @@ public class UserCustomerImportService extends BaseService {
             rowIndex++;
         }
 
-        // If no validation errors are present, proceed and add the user customers; If validation errors are present,
-        // no user customer should be persisted
+        persistFarmers(farmers, companyId, authUser, language, response);
+
+        return response;
+    }
+
+    /**
+     * Persists the farmers an import produced, unless the file had validation errors - in which
+     * case nothing at all is persisted, so a partly-rejected file never leaves half its farmers
+     * behind. Farmers that already exist are reported back as duplicates for the user to accept or
+     * reject.
+     */
+    private void persistFarmers(List<ApiUserCustomer> farmers,
+                                Long companyId,
+                                CustomUserDetails authUser,
+                                Language language,
+                                ApiUserCustomerImportResponse response) throws ApiException {
+
+        List<ApiUserCustomer> duplicates = new ArrayList<>();
+        List<ApiUserCustomer> toAdd = new ArrayList<>();
+
+        for (ApiUserCustomer farmer : farmers) {
+            if (companyService.existsUserCustomer(farmer)) {
+                duplicates.add(farmer);
+            } else {
+                toAdd.add(farmer);
+            }
+        }
+
+        int successful = 0;
+
         if (response.getValidationErrors().isEmpty()) {
+
+            // Farmers that are new to the company
             for (ApiUserCustomer apiUserCustomer : toAdd) {
                 companyService.addUserCustomer(companyId, apiUserCustomer, authUser, language);
                 successful++;
@@ -226,8 +303,6 @@ public class UserCustomerImportService extends BaseService {
         }
 
         response.setSuccessful(successful);
-
-        return response;
     }
 
     /**
@@ -274,9 +349,9 @@ public class UserCustomerImportService extends BaseService {
         if (row == null) {
             return true;
         }
-        // Every column counts, geo data included: a row that carries only a plot boundary is real
-        // data, and stopping at it would silently discard the rest of the file.
-        for (int i = 0; i <= GEO_DATA_COLUMN; i++) {
+        // Every column counts, geo data included: a row that carries only a further plot for the
+        // farmer above is real data, and stopping at it would silently discard the rest of the file.
+        for (int i = 0; i <= LAST_COLUMN; i++) {
             if (!emptyCell(row.getCell(i))) {
                 return false;
             }
@@ -508,6 +583,24 @@ public class UserCustomerImportService extends BaseService {
         }
     }
 
+    /**
+     * A row carrying nothing but geo data: an extra plot for the farmer on the row above. Files
+     * exported from a form with a repeat group flatten multi-plot farmers exactly this way, leaving
+     * the farmer columns blank on the continuation rows.
+     */
+    private boolean geoOnlyRow(Row row) {
+
+        if (emptyCell(row.getCell(GEO_DATA_COLUMN))) {
+            return false;
+        }
+        for (int i = 0; i < GEO_DATA_COLUMN; i++) {
+            if (!emptyCell(row.getCell(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private boolean invalidCell(Cell cell, List<CellType> cellTypeList) {
         return invalidCell(cell, CellType._NONE) && invalidCell(cell, CellType.BLANK) && cellTypeList.stream().allMatch(cellType -> invalidCell(cell, cellType));
     }
@@ -683,6 +776,19 @@ public class UserCustomerImportService extends BaseService {
             }
             plot.setPlotName(PLOT_NAME_PREFIX + (label == null || label.isBlank() ? String.valueOf(index) : label.trim()));
         }
+    }
+
+    /** Appends plots to a farmer, keeping every plot of that farmer distinctly named. */
+    private void addPlotsToFarmer(ApiUserCustomer farmer, List<ApiPlot> newPlots) {
+
+        if (newPlots.isEmpty()) {
+            return;
+        }
+        if (farmer.getPlots() == null) {
+            farmer.setPlots(new ArrayList<>());
+        }
+        farmer.getPlots().addAll(newPlots);
+        nameFarmerPlots(farmer);
     }
 
 }
