@@ -12,6 +12,8 @@ import com.abelium.inatrace.types.CompanyStatus;
 import com.abelium.inatrace.types.CompanyUserRole;
 import com.abelium.inatrace.types.UserRole;
 import com.abelium.inatrace.types.UserStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,6 +46,7 @@ class GroupStockOrderApiAuthTest extends AbstractMySqlIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private EntityManager em;
     @Autowired private TokenService tokenService;
+    @Autowired private ObjectMapper objectMapper;
 
     @Value("${INATrace.auth.accessTokenCookieName}")
     private String accessCookieName;
@@ -73,12 +76,27 @@ class GroupStockOrderApiAuthTest extends AbstractMySqlIntegrationTest {
         stock.setInternalLotNumber(ACME_LOT);
         stock.setOrderType(OrderType.PURCHASE_ORDER);
         stock.setProductionDate(LocalDate.of(2025, 7, 12));
+        stock.setDeliveryTime(LocalDate.of(2025, 7, 15));
         stock.setTotalQuantity(new BigDecimal("9823.45"));
         stock.setFulfilledQuantity(BigDecimal.ZERO);
         stock.setAvailableQuantity(new BigDecimal("9823.45"));
         stock.setCreatedBy(owner);
         stock.setUpdatedBy(owner);
         em.persist(stock);
+
+        StockOrder secondStock = new StockOrder();
+        secondStock.setCompany(acme);
+        secondStock.setFacility(facility);
+        secondStock.setInternalLotNumber("Z-GROUPED-LOT");
+        secondStock.setOrderType(OrderType.PURCHASE_ORDER);
+        secondStock.setProductionDate(LocalDate.of(2025, 7, 10));
+        secondStock.setDeliveryTime(LocalDate.of(2025, 7, 20));
+        secondStock.setTotalQuantity(BigDecimal.TEN);
+        secondStock.setFulfilledQuantity(BigDecimal.ZERO);
+        secondStock.setAvailableQuantity(BigDecimal.TEN);
+        secondStock.setCreatedBy(owner);
+        secondStock.setUpdatedBy(owner);
+        em.persist(secondStock);
 
         ownerSession = cookie(owner);
         strangerSession = cookie(stranger);
@@ -109,6 +127,52 @@ class GroupStockOrderApiAuthTest extends AbstractMySqlIntegrationTest {
         String body = result.getResponse().getContentAsString();
         assertEquals(401, result.getResponse().getStatus(), body);
         assertFalse(body.contains(ACME_LOT), body);
+    }
+
+    @Test
+    void supportedSortFieldsAndDirectionsRemainAvailable() throws Exception {
+        assertEquals("Z-GROUPED-LOT", firstLot("date", "ASC"));
+        assertEquals(ACME_LOT, firstLot("date", "DESC"));
+        assertEquals(ACME_LOT, firstLot("deliveryTime", "ASC"));
+        assertEquals("Z-GROUPED-LOT", firstLot("deliveryTime", "DESC"));
+        assertEquals(ACME_LOT, firstLot("id", "ASC"));
+        assertEquals("Z-GROUPED-LOT", firstLot("id", "DESC"));
+        assertEquals(200, sortedRequest("updateTimestamp", "ASC").getResponse().getStatus());
+        assertEquals(200, sortedRequest("updateTimestamp", "DESC").getResponse().getStatus());
+    }
+
+    @Test
+    void unrecognizedSortExpressionsUseSafeDefault() throws Exception {
+        assertEquals("Z-GROUPED-LOT", firstLot(null, "DESC"));
+        assertEquals("Z-GROUPED-LOT", firstLot("date, id", "DESC"));
+        assertEquals(ACME_LOT, firstLot("unknownField", "ASC"));
+        assertEquals(ACME_LOT, firstLot("", "ASC"));
+    }
+
+    @Test
+    void foreignCompanyCannotUseSortExpressionsToReadStock() throws Exception {
+        MvcResult result = mockMvc.perform(get(path()).cookie(strangerSession)
+                .param("sortBy", "date, id")).andReturn();
+        assertEquals(403, result.getResponse().getStatus());
+        assertFalse(result.getResponse().getContentAsString().contains(ACME_LOT));
+    }
+
+    private String firstLot(String sortBy, String direction) throws Exception {
+        MvcResult result = sortedRequest(sortBy, direction);
+        String body = result.getResponse().getContentAsString();
+        assertEquals(200, result.getResponse().getStatus(), body);
+        JsonNode root = objectMapper.readTree(body);
+        JsonNode items = root.path("data").path("items");
+        assertEquals(2, items.size(), body);
+        return items.get(0).path("internalLotNumber").asText();
+    }
+
+    private MvcResult sortedRequest(String sortBy, String direction) throws Exception {
+        var request = get(path()).cookie(ownerSession).param("sort", direction);
+        if (sortBy != null) {
+            request.param("sortBy", sortBy);
+        }
+        return mockMvc.perform(request).andReturn();
     }
 
     private MvcResult request(Cookie session) throws Exception {

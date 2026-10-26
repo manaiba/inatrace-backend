@@ -79,7 +79,12 @@ public class GroupStockOrderService extends BaseService {
 
         // Add ORDER BY query string to sort on requested field and direction
         queryString.append("ORDER BY ");
-        queryString.append(request.sortBy);
+        queryString.append(switch (request.sortBy == null ? "" : request.sortBy) {
+            case "date" -> "date";
+            case "deliveryTime" -> "deliveryTime";
+            case "updateTimestamp" -> "updateTimestamp";
+            default -> "id";
+        });
         queryString.append(" ");
         queryString.append(request.sort.toString());
 
